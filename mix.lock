@@ -1,0 +1,8 @@
+%{"croma": {:hex, :croma, "0.4.0"},
+  "dialyze": {:hex, :dialyze, "0.2.1"},
+  "earmark": {:hex, :earmark, "0.2.1"},
+  "eqc_ex": {:hex, :eqc_ex, "1.2.4"},
+  "ex_doc": {:hex, :ex_doc, "0.11.4"},
+  "excheck": {:hex, :excheck, "0.3.3"},
+  "exref": {:hex, :exref, "0.1.0"},
+  "triq": {:git, "https://github.com/krestenkrab/triq.git", "c7306b8eaea133d52140cb828817efb5e50a3d52", []}}
