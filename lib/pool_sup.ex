@@ -35,7 +35,7 @@ defmodule PoolSup do
 
   Don't forget to return the `child_pid` when finished; for simple use cases `PoolSup.transaction/3` comes in handy.
 
-  ## Usage within supervision tree
+  ### Usage within supervision tree
 
   The following code snippet spawns a supervisor that has `PoolSup` process as one of its children.
   The `PoolSup` process manages 5 worker processes and they will be started by `MyWorker.start_link({:worker, :arg})`.
@@ -103,7 +103,7 @@ defmodule PoolSup do
   ## Arguments
   - `worker_module` is the callback module of `PoolSup.Worker`.
   - `worker_init_arg` is the value passed to `worker_module.start_link/1` callback function.
-  - `capacity` is the initial number of processes this `PoolSup` process holds.
+  - `capacity` is the initial number of workers this `PoolSup` process holds.
   - Currently only `:name` option is supported for name registration.
   """
   defun start_link(worker_module :: g[module], worker_init_arg :: term, capacity :: g[non_neg_integer], options :: options \\ []) :: GS.on_start do
