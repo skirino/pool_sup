@@ -37,7 +37,7 @@ defmodule PoolSupTest do
 
   test "should checkout/checkin children" do
     {:ok, pid} = PoolSup.start_link(W, [], 3)
-    {:state, _, _, children, _, _} = :sys.get_state(pid)
+    {:state, _, _, children, _, _, _} = :sys.get_state(pid)
     [child1, _child2, _child3] = children
     assert Enum.all?(children, &Process.alive?/1)
 
@@ -48,12 +48,36 @@ defmodule PoolSupTest do
     PoolSup.checkin(pid, child1)
     assert PoolSup.status(pid) == %{current_capacity: 3, desired_capacity: 3, available: 3, working: 0}
 
-    worker1 = PoolSup.checkout(pid)
-    worker2 = PoolSup.checkout(pid)
-    worker3 = PoolSup.checkout(pid)
+    # nonblocking checkout
+    worker1 = PoolSup.checkout_nonblock(pid)
+    worker2 = PoolSup.checkout_nonblock(pid)
+    worker3 = PoolSup.checkout_nonblock(pid)
     assert MapSet.new([worker1, worker2, worker3]) == MapSet.new(children)
-    assert PoolSup.checkout(pid) == nil
+    assert PoolSup.checkout_nonblock(pid) == nil
+    PoolSup.checkin(pid, worker1)
 
+    # blocking checkout
+    ^worker1 = PoolSup.checkout(pid)
+    catch_exit PoolSup.checkout(pid, 10)
+    current_test_pid = self
+    f = fn ->
+      send(current_test_pid, PoolSup.checkout(pid))
+    end
+    checkout_pid1 = spawn(f)
+    :timer.sleep(1)
+    checkout_pid2 = spawn(f)
+    assert Process.alive?(checkout_pid1)
+    assert Process.alive?(checkout_pid2)
+    PoolSup.checkin(pid, worker2)
+    assert_receive(worker2, 10)
+    refute Process.alive?(checkout_pid1)
+    Process.exit(worker3, :shutdown)
+    receive do
+      newly_spawned_worker_pid -> refute newly_spawned_worker_pid in [worker1, worker2, worker3]
+    end
+    refute Process.alive?(checkout_pid2)
+
+    # cleanup
     Supervisor.stop(pid)
     refute Process.alive?(pid)
     refute Enum.any?(children, &Process.alive?/1)
@@ -102,7 +126,8 @@ defmodule PoolSupTest do
       pid ->
         [
           [
-            {:call, PoolSup   , :checkout, [pid]},
+            {:call, PoolSup   , :checkout_nonblock, [pid]},
+            {:call, __MODULE__, :checkout_and_catch, [pid]},
             {:call, __MODULE__, :try_checkout_and_kill_running_worker, [pid]},
             {:call, PoolSup   , :change_capacity, [pid, int(0, @max_capacity)]},
           ],
@@ -124,8 +149,16 @@ defmodule PoolSupTest do
     pid
   end
 
+  def checkout_and_catch(pid) do
+    try do
+      PoolSup.checkout(pid, 10)
+    catch
+      :exit, {:timeout, _} -> :timeout
+    end
+  end
+
   def try_checkout_and_kill_running_worker(pid) do
-    case PoolSup.checkout(pid) do
+    case PoolSup.checkout_nonblock(pid) do
       nil   -> :ok
       child -> kill_child(child)
     end
@@ -175,7 +208,7 @@ defmodule PoolSupTest do
   def next_state(state, _v, {:call, PoolSup, :change_capacity, [_, capacity]}) do
     %{state | capacity: capacity}
   end
-  def next_state(state, v, {:call, PoolSup, :checkout, _}) do
+  def next_state(state, v, {:call, mod, fun, _}) when (mod == PoolSup and fun == :checkout_nonblock) or (mod == __MODULE__ and fun == :checkout_and_catch) do
     if length(state[:checked_out]) < state[:capacity] do
       %{state | checked_out: [v | state[:checked_out]]}
     else
@@ -196,13 +229,14 @@ defmodule PoolSupTest do
     case Process.whereis(__MODULE__) do
       nil -> true
       pid ->
-        {:state, all, working, available, to_decrease, sup_state} = :sys.get_state(pid)
+        {:state, all, working, available, to_decrease, waiting, sup_state} = :sys.get_state(pid)
         Enum.all?([
           map_size(all) - to_decrease == capacity,
           data_type_correct?(all, working, available, to_decrease),
           all_corresponds_to_child_pids?(all, sup_state),
           union_of_working_and_available_equals_to_all?(all, working, available),
           is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease),
+          is_waiting_queue_empty_when_any_child_available?(available, waiting),
         ])
     end
   end
@@ -225,6 +259,10 @@ defmodule PoolSupTest do
 
   defp is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease) do
     Enum.empty?(available) or to_decrease == 0
+  end
+
+  defp is_waiting_queue_empty_when_any_child_available?(available, waiting) do
+    Enum.empty?(available) or :queue.is_empty(waiting)
   end
 
   property :internal_state_invariance do

@@ -27,6 +27,7 @@ defmodule PoolSup do
   end
 
   @type  options   :: [name: GS.name]
+  @typep pid_queue :: :queue.queue(pid)
   @typep sup_state :: any
 
   require Record
@@ -35,6 +36,7 @@ defmodule PoolSup do
     :working,
     :available,
     :capacity_to_decrease,
+    :waiting,
     :sup_state,
   ]
   @typep state :: record(:state,
@@ -42,6 +44,7 @@ defmodule PoolSup do
     working:              PidSet.t,
     available:            [pid],
     capacity_to_decrease: non_neg_integer,
+    waiting:              pid_queue,
     sup_state:            sup_state,
   )
 
@@ -61,10 +64,8 @@ defmodule PoolSup do
 
   # gen_server callbacks
   def init({mod, init_arg, capacity, opts}) do
-    case :supervisor.init(supervisor_init_arg(mod, init_arg, opts)) do
-      {:ok, sup_state} -> {:ok, make_state(capacity, sup_state)}
-      other            -> other
-    end
+    {:ok, sup_state} = :supervisor.init(supervisor_init_arg(mod, init_arg, opts))
+    {:ok, make_state(capacity, sup_state)}
   end
 
   defp supervisor_init_arg(mod, init_arg, opts) do
@@ -77,7 +78,7 @@ defmodule PoolSup do
   defunp make_state(capacity :: non_neg_integer, sup_state :: sup_state) :: state do
     {pids, new_sup_state} = prepare_children(capacity, [], sup_state)
     all = PidSet.from_list(pids)
-    state(all: all, working: PidSet.new, available: pids, capacity_to_decrease: 0, sup_state: new_sup_state)
+    state(all: all, working: PidSet.new, available: pids, capacity_to_decrease: 0, waiting: :queue.new, sup_state: new_sup_state)
   end
 
   defunp prepare_children(capacity :: non_neg_integer, pids :: [pid], sup_state :: sup_state) :: {[pid], sup_state} do
@@ -89,12 +90,18 @@ defmodule PoolSup do
     end
   end
 
-  def handle_call(:checkout, _from, state(working: working, available: available) = s) do
+  def handle_call(:checkout_nonblock, _from, state(available: available) = s) do
     case available do
-      []        -> {:reply, nil, s}
-      [pid | pids] ->
-        new_state = state(s, working: PidSet.put(working, pid), available: pids)
-        {:reply, pid, new_state}
+      [pid | pids] -> reply_with_pid(pid, pids, s)
+      []           -> {:reply, nil, s}
+    end
+  end
+  def handle_call(:checkout, from, state(available: available, waiting: waiting) = s) do
+    case available do
+      [pid | pids] -> reply_with_pid(pid, pids, s)
+      []           ->
+        new_state = state(s, waiting: :queue.in(from, waiting))
+        {:noreply, new_state}
     end
   end
   def handle_call(:status, _from,
@@ -132,6 +139,10 @@ defmodule PoolSup do
     {:reply, reply, state(s, sup_state: new_sup_state)}
   end
 
+  defunp reply_with_pid(pid :: pid, pids :: [pid], state(working: working) = s :: state) :: {:reply, pid, state} do
+    {:reply, pid, state(s, working: PidSet.put(working, pid), available: pids)}
+  end
+
   defunp increase_children(to_increase :: non_neg_integer, state(all: all, available: available, sup_state: sup_state) = s :: state) :: state do
     if to_increase == 0 do
       state(s, capacity_to_decrease: 0)
@@ -167,13 +178,25 @@ defmodule PoolSup do
   end
 
   def handle_cast({:checkin, pid},
-                  state(all: all, working: working, available: available, capacity_to_decrease: to_decrease, sup_state: sup_state) = s) do
+                  state(all: all,
+                        working: working,
+                        available: available,
+                        capacity_to_decrease: to_decrease,
+                        waiting: waiting,
+                        sup_state: sup_state) = s) do
     if PidSet.member?(working, pid) do
-      working2 = PidSet.delete(working, pid)
       new_state =
         if to_decrease == 0 do
-          state(s, working: working2, available: [pid | available])
+          case :queue.out(waiting) do
+            {{:value, wait_pid}, waiting2} ->
+              GenServer.reply(wait_pid, pid)
+              state(s, waiting: waiting2)
+            {:empty, _} ->
+              working2 = PidSet.delete(working, pid)
+              state(s, working: working2, available: [pid | available])
+          end
         else
+          working2 = PidSet.delete(working, pid)
           new_sup_state = terminate_child(pid, sup_state)
           state(s, all: PidSet.delete(all, pid), working: working2, capacity_to_decrease: to_decrease - 1, sup_state: new_sup_state)
         end
@@ -181,6 +204,10 @@ defmodule PoolSup do
     else
       {:noreply, s}
     end
+  end
+  def handle_cast({:cancel_waiting, pid}, state(waiting: waiting) = s) do
+    new_waiting = :queue.filter(&(&1 == pid), waiting)
+    {:noreply, state(s, waiting: new_waiting)}
   end
   def handle_cast(msg, state(sup_state: sup_state)) do
     :supervisor.handle_cast(msg, sup_state)
@@ -212,6 +239,7 @@ defmodule PoolSup do
                                    working:              working,
                                    available:            available,
                                    capacity_to_decrease: to_decrease,
+                                   waiting:              waiting,
                                    sup_state:            sup_state) = s :: state,
                              child_pid :: pid) :: state do
     {working2, available2} =
@@ -223,8 +251,15 @@ defmodule PoolSup do
     if to_decrease == 0 do
       {new_child_pid, new_sup_state} = start_child(sup_state)
       all3 = PidSet.put(all2, new_child_pid)
-      available3 = [new_child_pid | available2]
-      state(s, all: all3, working: working2, available: available3, sup_state: new_sup_state)
+      case :queue.out(waiting) do
+        {{:value, wait_pid}, waiting2} ->
+          GenServer.reply(wait_pid, new_child_pid)
+          working3 = PidSet.put(working2, new_child_pid)
+          state(s, all: all3, working: working3, available: available2, waiting: waiting2, sup_state: new_sup_state)
+        {:empty, _} ->
+          available3 = [new_child_pid | available2]
+          state(s, all: all3, working: working2, available: available3, sup_state: new_sup_state)
+      end
     else
       state(s, all: all2, working: working2, available: available2, capacity_to_decrease: to_decrease - 1)
     end
@@ -250,7 +285,20 @@ defmodule PoolSup do
   TODO
   """
   defun checkout(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
-    GenServer.call(pool, :checkout, timeout)
+    try do
+      GenServer.call(pool, :checkout, timeout)
+    catch
+      :exit, {:timeout, _} = reason ->
+        GenServer.cast(pool, {:cancel_waiting, self})
+        :erlang.raise(:exit, reason, :erlang.get_stacktrace)
+    end
+  end
+
+  @doc """
+  TODO
+  """
+  defun checkout_nonblock(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
+    GenServer.call(pool, :checkout_nonblock, timeout)
   end
 
   @doc """
