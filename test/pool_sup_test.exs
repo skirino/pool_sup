@@ -10,13 +10,12 @@ defmodule PoolSupTest do
     end
   end
 
-  test "should behave as a ordinary supervisor" do
+  test "should behave as an ordinary supervisor" do
     {:ok, pid} = PoolSup.start_link(W, [], 3, [name: __MODULE__])
     children = Supervisor.which_children(pid)
     assert length(children) == 3
     assert Supervisor.which_children(pid) == children
     assert Supervisor.count_children(pid)[:active] == 3
-    assert :supervisor.get_callback_module(pid) == PoolSup.Callback
     :ok = Supervisor.stop(pid)
     refute Process.alive?(pid)
   end
