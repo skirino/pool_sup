@@ -59,6 +59,7 @@ defmodule PoolSupTest do
     # blocking checkout
     ^worker1 = PoolSup.checkout(pid)
     catch_exit PoolSup.checkout(pid, 10)
+
     current_test_pid = self
     f = fn ->
       send(current_test_pid, PoolSup.checkout(pid))
@@ -68,9 +69,11 @@ defmodule PoolSupTest do
     checkout_pid2 = spawn(f)
     assert Process.alive?(checkout_pid1)
     assert Process.alive?(checkout_pid2)
+
     PoolSup.checkin(pid, worker2)
     assert_receive(worker2, 10)
     refute Process.alive?(checkout_pid1)
+
     Process.exit(worker3, :shutdown)
     receive do
       newly_spawned_worker_pid -> refute newly_spawned_worker_pid in [worker1, worker2, worker3]
@@ -81,6 +84,24 @@ defmodule PoolSupTest do
     Supervisor.stop(pid)
     refute Process.alive?(pid)
     refute Enum.any?(children, &Process.alive?/1)
+  end
+
+  test "transaction/3 should correctly checkin child pid" do
+    {:ok, pid} = PoolSup.start_link(W, [], 1)
+    child_not_in_use? = fn ->
+      child = PoolSup.checkout(pid)
+      PoolSup.checkin(pid, child)
+    end
+
+    assert child_not_in_use?.()
+    assert PoolSup.transaction(pid, fn _ -> :ok end) == :ok
+    assert child_not_in_use?.()
+    catch_error PoolSup.transaction(pid, fn _ -> raise "foo" end)
+    assert child_not_in_use?.()
+    catch_throw PoolSup.transaction(pid, fn _ -> throw "bar" end)
+    assert child_not_in_use?.()
+    catch_exit PoolSup.transaction(pid, fn _ -> exit(:baz) end)
+    assert child_not_in_use?.()
   end
 
   test "should die when parent process dies" do

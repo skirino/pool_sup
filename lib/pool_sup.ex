@@ -97,6 +97,18 @@ defmodule PoolSup do
   @doc """
   TODO
   """
+  defun transaction(pool :: GS.name, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: any do
+    pid = checkout(pool, timeout)
+    try do
+      f.(pid)
+    after
+      checkin(pool, pid)
+    end
+  end
+
+  @doc """
+  TODO
+  """
   defun status(pool :: GS.name) :: %{current_capacity: ni, desired_capacity: ni, available: ni, working: ni} when ni: non_neg_integer do
     GenServer.call(pool, :status)
   end
