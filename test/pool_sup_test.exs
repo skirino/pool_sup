@@ -202,13 +202,14 @@ defmodule PoolSupTest do
           data_type_correct?(all, working, available, to_decrease),
           all_corresponds_to_child_pids?(all, sup_state),
           union_of_working_and_available_equals_to_all?(all, working, available),
+          is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease),
         ])
     end
   end
 
   defp data_type_correct?(all, working, available, to_decrease) do
     all_pid? = [Map.keys(all), Map.keys(working), available] |> List.flatten |> Enum.all?(&is_pid/1)
-    all_pid? && is_integer(to_decrease) && to_decrease >= 0
+    all_pid? and is_integer(to_decrease) and to_decrease >= 0
   end
 
   defp all_corresponds_to_child_pids?(all, sup_state) do
@@ -220,6 +221,10 @@ defmodule PoolSupTest do
 
   defp union_of_working_and_available_equals_to_all?(all, working, available) do
     Enum.into(available, working, fn pid -> {pid, true} end) == all
+  end
+
+  defp is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease) do
+    Enum.empty?(available) or to_decrease == 0
   end
 
   property :internal_state_invariance do
