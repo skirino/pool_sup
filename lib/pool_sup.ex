@@ -2,7 +2,50 @@ use Croma
 
 defmodule PoolSup do
   @moduledoc """
-  TODO
+  This module defines a supervisor process that is specialized to manage pool of workers.
+
+  - Process defined by this module behaves as a `:simple_one_for_one` supervisor.
+  - Worker processes are spawned using a callback module that implements `PoolSup.Worker` behaviour.
+  - The `PoolSup` process manages which child processes are in use and which are not.
+  - Functions to request pid of a child process that is not in use are also defined.
+
+  ## Example
+
+  Suppose we have a module that implements both `GenServer` and `PoolSup.Worker` behaviours.
+
+      iex(1)> defmodule MyWorker do
+      ...(1)>   @behaviour PoolSup.Worker
+      ...(1)>   use GenServer
+      ...(1)>   def start_link(arg) do
+      ...(1)>     GenServer.start_link(__MODULE__, arg)
+      ...(1)>   end
+      ...(1)>   # definitions of gen_server callbacks...
+      ...(1)> end
+
+  When we want to have 3 processes that run `MyWorker` server:
+
+      iex(2)> {:ok, pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, [name: :my_pool])
+
+  Each child process is started by `MyWorker.start_link({:worker, :arg})`.
+  Then we can get a pid of a child currently not in use.
+
+      iex(3)> child_pid = PoolSup.checkout(:my_pool)
+      iex(4)> do_something(child_pid)
+      iex(5)> PoolSup.checkin(:my_pool, child_pid)
+
+  Don't forget to return the `child_pid` when finished; for simple use cases `PoolSup.transaction/3` comes in handy.
+
+  ## Usage within supervision tree
+
+  The following code snippet spawns a supervisor that has `PoolSup` process as one of its children.
+  The `PoolSup` process manages 5 worker processes and they will be started by `MyWorker.start_link({:worker, :arg})`.
+
+      chilldren = [
+        ...
+        Supervisor.Spec.supervisor(PoolSup, [MyWorker, {:worker, :arg}, 5]),
+        ...
+      ]
+      Supervisor.start_link(children, [strategy: :one_for_one])
   """
 
   alias Supervisor, as: S
@@ -28,6 +71,7 @@ defmodule PoolSup do
     defun from_list(pids :: [pid])      :: t      , do: Enum.into(pids, %{}, &{&1, true})
   end
 
+  @type  pool      :: pid | GS.name
   @type  options   :: [name: GS.name]
   @typep pid_queue :: :queue.queue(pid)
   @typep sup_state :: any
@@ -54,10 +98,16 @@ defmodule PoolSup do
   # external API
   #
   @doc """
-  TODO
+  Starts a `PoolSup` process linked to the calling process.
+
+  ## Arguments
+  - `worker_module` is the callback module of `PoolSup.Worker`.
+  - `worker_init_arg` is the value passed to `worker_module.start_link/1` callback function.
+  - `capacity` is the initial number of processes this `PoolSup` process holds.
+  - Currently only `:name` option is supported for name registration.
   """
-  defun start_link(worker_module :: g[module], worker_init_arg :: term, capacity :: g[non_neg_integer], opts :: options \\ []) :: GS.on_start do
-    GS.start_link(__MODULE__, {worker_module, worker_init_arg, capacity, opts}, gen_server_opts(opts))
+  defun start_link(worker_module :: g[module], worker_init_arg :: term, capacity :: g[non_neg_integer], options :: options \\ []) :: GS.on_start do
+    GS.start_link(__MODULE__, {worker_module, worker_init_arg, capacity, options}, gen_server_opts(options))
   end
 
   defunp gen_server_opts(opts :: options) :: [name: GS.name] do
@@ -68,9 +118,13 @@ defmodule PoolSup do
   end
 
   @doc """
-  TODO
+  Checks out a worker pid that is currently not used.
+
+  If no available worker process exists, the caller is blocked until either
+  - any process becomes available, or
+  - timeout is reached.
   """
-  defun checkout(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
+  defun checkout(pool :: pool, timeout :: timeout \\ 5000) :: nil | pid do
     try do
       GenServer.call(pool, :checkout, timeout)
     catch
@@ -81,23 +135,25 @@ defmodule PoolSup do
   end
 
   @doc """
-  TODO
+  Checks out a worker pid in a nonblocking manner, i.e. if no available worker found this returns `nil`.
   """
-  defun checkout_nonblock(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
+  defun checkout_nonblock(pool :: pool, timeout :: timeout \\ 5000) :: nil | pid do
     GenServer.call(pool, :checkout_nonblock, timeout)
   end
 
   @doc """
-  TODO
+  Checks in an in-use worker process and make it available to others.
   """
-  defun checkin(pool :: GS.name, pid :: g[pid]) :: :ok do
+  defun checkin(pool :: pool, pid :: g[pid]) :: :ok do
     GenServer.cast(pool, {:checkin, pid})
   end
 
   @doc """
-  TODO
+  Temporarily checks out a worker pid, executes the given function using the pid, and checks in the pid.
+
+  The `timeout` parameter is used only in the checkout step; time elapsed during other steps are not counted.
   """
-  defun transaction(pool :: GS.name, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: any do
+  defun transaction(pool :: pool, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: any do
     pid = checkout(pool, timeout)
     try do
       f.(pid)
@@ -107,16 +163,24 @@ defmodule PoolSup do
   end
 
   @doc """
-  TODO
+  Query current status of a pool.
   """
-  defun status(pool :: GS.name) :: %{current_capacity: ni, desired_capacity: ni, available: ni, working: ni} when ni: non_neg_integer do
+  defun status(pool :: pool) :: %{current_capacity: nni, desired_capacity: nni, available: nni, working: nni} when nni: non_neg_integer do
     GenServer.call(pool, :status)
   end
 
   @doc """
-  TODO
+  Changes capacity (number of worker processes) of a pool.
+
+  If `new_capacity` is more than the current capacity, new processes are immediately spawned and become available.
+  Note that, as is the same throughout the OTP framework, spawning processes under supervisor is synchronous operation.
+  Therefore increasing large number of capacity at once may make a pool unresponsive for a while.
+
+  If `new_capacity` is less than the current capacity, the pool tries to shutdown workers that are not in use.
+  Processes currently in use are never interrupted.
+  If number of in-use workers is more than `new_capacity`, reducing further is delayed until any worker process is checked in.
   """
-  defun change_capacity(pool :: GS.name, new_capacity :: g[non_neg_integer]) :: :ok do
+  defun change_capacity(pool :: pool, new_capacity :: g[non_neg_integer]) :: :ok do
     GenServer.call(pool, {:change_capacity, new_capacity})
   end
 
@@ -330,6 +394,7 @@ defmodule PoolSup do
   end
 
   # We need to define `format_status` to pretend as if it's an ordinary supervisor when `sys:get_status/1` is called
+  @doc false
   def format_status(:terminate, [_pdict, s                          ]), do: s
   def format_status(:normal   , [_pdict, state(sup_state: sup_state)]), do: [{:data, [{'State', sup_state}]}]
 end
