@@ -110,6 +110,17 @@ defmodule PoolSupTest do
     assert :sys.get_state(pool_pid) == state_before
   end
 
+  test "should not be affected by some info messages" do
+    {:ok, pid} = PoolSup.start_link(W, [], 3)
+    state = :sys.get_state(pid)
+    send(pid, :timeout)
+    assert :sys.get_state(pid) == state
+
+    mref = Process.monitor(pid)
+    send(pid, {:DOWN, mref, :process, self, :shutdown})
+    assert :sys.get_state(pid) == state
+  end
+
   #
   # property-based tests
   #
@@ -128,13 +139,13 @@ defmodule PoolSupTest do
           [
             {:call, PoolSup   , :checkout_nonblock, [pid]},
             {:call, __MODULE__, :checkout_and_catch, [pid]},
-            {:call, __MODULE__, :try_checkout_and_kill_running_worker, [pid]},
             {:call, PoolSup   , :change_capacity, [pid, int(0, @max_capacity)]},
           ],
           case state[:checked_out] do
             []       -> []
             children -> [
               {:call, PoolSup   , :checkin, [pid, :triq_dom.elements(children)]},
+              {:call, __MODULE__, :kill_running_worker, [pid, :triq_dom.elements(children)]},
               {:call, __MODULE__, :checkin_and_kill_idle_worker, [pid, :triq_dom.elements(children)]},
             ]
           end,
@@ -157,11 +168,8 @@ defmodule PoolSupTest do
     end
   end
 
-  def try_checkout_and_kill_running_worker(pid) do
-    case PoolSup.checkout_nonblock(pid) do
-      nil   -> :ok
-      child -> kill_child(child)
-    end
+  def kill_running_worker(_pid, child) do
+    kill_child(child)
   end
 
   def checkin_and_kill_idle_worker(pid, child) do
@@ -218,7 +226,7 @@ defmodule PoolSupTest do
   def next_state(state, _v, {:call, PoolSup, :checkin, [_, target]}) do
     %{state | checked_out: List.delete(state[:checked_out], target)}
   end
-  def next_state(state, _v, {:call, __MODULE__, :checkin_and_kill_idle_worker, [_, target]}) do
+  def next_state(state, _v, {:call, __MODULE__, fun, [_, target]}) when fun in [:kill_running_worker, :checkin_and_kill_idle_worker] do
     %{state | checked_out: List.delete(state[:checked_out], target)}
   end
   def next_state(state, _v, _cmd) do

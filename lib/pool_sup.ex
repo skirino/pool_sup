@@ -10,6 +10,7 @@ defmodule PoolSup do
   use GS
 
   defmodule Callback do
+    @moduledoc false
     # The sole purpose of this module is to suppress dialyzer warning;
     # using `Supervisor.Default` results in a warning due to (seemingly) incorrect typespec of
     # `supervisor:init/1` (which is an implementation of `gen_server:init/1` callback, not callback of supervisor behaviour).
@@ -18,6 +19,7 @@ defmodule PoolSup do
   end
 
   defmodule PidSet do
+    @moduledoc false
     @type t :: %{pid => true}
     defun new                           :: t      , do: %{}
     defun member?(set :: t, pid :: pid) :: boolean, do: Map.has_key?(set, pid)
@@ -48,6 +50,9 @@ defmodule PoolSup do
     sup_state:            sup_state,
   )
 
+  #
+  # external API
+  #
   @doc """
   TODO
   """
@@ -62,7 +67,50 @@ defmodule PoolSup do
     end
   end
 
+  @doc """
+  TODO
+  """
+  defun checkout(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
+    try do
+      GenServer.call(pool, :checkout, timeout)
+    catch
+      :exit, {:timeout, _} = reason ->
+        GenServer.cast(pool, {:cancel_waiting, self})
+        :erlang.raise(:exit, reason, :erlang.get_stacktrace)
+    end
+  end
+
+  @doc """
+  TODO
+  """
+  defun checkout_nonblock(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
+    GenServer.call(pool, :checkout_nonblock, timeout)
+  end
+
+  @doc """
+  TODO
+  """
+  defun checkin(pool :: GS.name, pid :: g[pid]) :: :ok do
+    GenServer.cast(pool, {:checkin, pid})
+  end
+
+  @doc """
+  TODO
+  """
+  defun status(pool :: GS.name) :: %{current_capacity: ni, desired_capacity: ni, available: ni, working: ni} when ni: non_neg_integer do
+    GenServer.call(pool, :status)
+  end
+
+  @doc """
+  TODO
+  """
+  defun change_capacity(pool :: GS.name, new_capacity :: g[non_neg_integer]) :: :ok do
+    GenServer.call(pool, {:change_capacity, new_capacity})
+  end
+
+  #
   # gen_server callbacks
+  #
   def init({mod, init_arg, capacity, opts}) do
     {:ok, sup_state} = :supervisor.init(supervisor_init_arg(mod, init_arg, opts))
     {:ok, make_state(capacity, sup_state)}
@@ -209,22 +257,15 @@ defmodule PoolSup do
     new_waiting = :queue.filter(&(&1 == pid), waiting)
     {:noreply, state(s, waiting: new_waiting)}
   end
-  def handle_cast(msg, state(sup_state: sup_state)) do
-    :supervisor.handle_cast(msg, sup_state)
-  end
 
   def handle_info(msg, state(sup_state: sup_state) = s) do
-    case :supervisor.handle_info(msg, sup_state) do
-      {:noreply, new_sup_state} ->
-        s2 = state(s, sup_state: new_sup_state)
-        new_state = case msg do
-          {:EXIT, pid, _reason} -> handle_exit(s2, pid)
-          _                     -> s2
-        end
-        {:noreply, new_state}
-      {:stop, reason, new_sup_state} ->
-        {:stop, reason, state(s, sup_state: new_sup_state)}
+    {:noreply, new_sup_state} = :supervisor.handle_info(msg, sup_state)
+    s2 = state(s, sup_state: new_sup_state)
+    s3 = case msg do
+      {:EXIT, pid, _reason} -> handle_exit(s2, pid)
+      _                     -> s2
     end
+    {:noreply, s3}
   end
 
   defunp handle_exit(state(all: all) = s :: state, pid :: pid) :: state do
@@ -279,46 +320,4 @@ defmodule PoolSup do
   # We need to define `format_status` to pretend as if it's an ordinary supervisor when `sys:get_status/1` is called
   def format_status(:terminate, [_pdict, s                          ]), do: s
   def format_status(:normal   , [_pdict, state(sup_state: sup_state)]), do: [{:data, [{'State', sup_state}]}]
-
-  # external API
-  @doc """
-  TODO
-  """
-  defun checkout(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
-    try do
-      GenServer.call(pool, :checkout, timeout)
-    catch
-      :exit, {:timeout, _} = reason ->
-        GenServer.cast(pool, {:cancel_waiting, self})
-        :erlang.raise(:exit, reason, :erlang.get_stacktrace)
-    end
-  end
-
-  @doc """
-  TODO
-  """
-  defun checkout_nonblock(pool :: GS.name, timeout :: timeout \\ 5000) :: nil | pid do
-    GenServer.call(pool, :checkout_nonblock, timeout)
-  end
-
-  @doc """
-  TODO
-  """
-  defun checkin(pool :: GS.name, pid :: g[pid]) :: :ok do
-    GenServer.cast(pool, {:checkin, pid})
-  end
-
-  @doc """
-  TODO
-  """
-  defun status(pool :: GS.name) :: %{current_capacity: ni, desired_capacity: ni, available: ni, working: ni} when ni: non_neg_integer do
-    GenServer.call(pool, :status)
-  end
-
-  @doc """
-  TODO
-  """
-  defun change_capacity(pool :: GS.name, new_capacity :: g[non_neg_integer]) :: :ok do
-    GenServer.call(pool, {:change_capacity, new_capacity})
-  end
 end
