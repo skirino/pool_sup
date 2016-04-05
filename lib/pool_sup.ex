@@ -7,11 +7,12 @@ defmodule PoolSup do
   - Process defined by this module behaves as a `:simple_one_for_one` supervisor.
   - Worker processes are spawned using a callback module that implements `PoolSup.Worker` behaviour.
   - The `PoolSup` process manages which child processes are in use and which are not.
-  - Functions to request pid of a child process that is not in use are also defined.
+  - Functions to request pid of a child process that is not in use are also defined (`checkout/2`, `checkout_nonblock/2`).
 
   ## Example
 
-  Suppose we have a module that implements both `GenServer` and `PoolSup.Worker` behaviours.
+  Suppose we have a module that implements both `GenServer` and `PoolSup.Worker` behaviours
+  (`PoolSup.Worker` behaviour requires only 1 callback to implement, `start_link/1`).
 
       iex(1)> defmodule MyWorker do
       ...(1)>   @behaviour PoolSup.Worker
@@ -22,12 +23,12 @@ defmodule PoolSup do
       ...(1)>   # definitions of gen_server callbacks...
       ...(1)> end
 
-  When we want to have 3 processes that run `MyWorker` server:
+  When we want to have 3 worker processes that run `MyWorker` server:
 
-      iex(2)> {:ok, pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, [name: :my_pool])
+      iex(2)> {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, [name: :my_pool])
 
-  Each child process is started by `MyWorker.start_link({:worker, :arg})`.
-  Then we can get a pid of a child currently not in use.
+  Each worker process is started using `MyWorker.start_link({:worker, :arg})`.
+  Then we can get a pid of a child currently not in use:
 
       iex(3)> child_pid = PoolSup.checkout(:my_pool)
       iex(4)> do_something(child_pid)
@@ -118,7 +119,7 @@ defmodule PoolSup do
   end
 
   @doc """
-  Checks out a worker pid that is currently not used.
+  Checks out a worker pid that is currently not used from a pool.
 
   If no available worker process exists, the caller is blocked until either
   - any process becomes available, or
@@ -142,7 +143,7 @@ defmodule PoolSup do
   end
 
   @doc """
-  Checks in an in-use worker process and make it available to others.
+  Checks in an in-use worker pid and make it available to others.
   """
   defun checkin(pool :: pool, pid :: g[pid]) :: :ok do
     GenServer.cast(pool, {:checkin, pid})

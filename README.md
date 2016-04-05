@@ -1,6 +1,6 @@
 # PoolSup: Yet another process pool library in [Elixir](http://elixir-lang.org/)
 
-A supervisor specialized to manage pool of workers.
+`PoolSup` defines a supervisor specialized to manage pool of workers.
 - [API Documentation](http://hexdocs.pm/pool_sup/)
 - [Hex package information](https://hex.pm/packages/pool_sup)
 
@@ -10,7 +10,8 @@ A supervisor specialized to manage pool of workers.
 
 ## Example
 
-Suppose we have a module that implements both `GenServer` and `PoolSup.Worker` behaviours.
+Suppose we have a module that implements both `GenServer` and `PoolSup.Worker` behaviours
+(`PoolSup.Worker` behaviour requires only 1 callback to implement, `start_link/1`).
 
     iex(1)> defmodule MyWorker do
     ...(1)>   @behaviour PoolSup.Worker
@@ -21,12 +22,12 @@ Suppose we have a module that implements both `GenServer` and `PoolSup.Worker` b
     ...(1)>   # definitions of gen_server callbacks...
     ...(1)> end
 
-When we want to have 3 processes that run `MyWorker` server:
+When we want to have 3 worker processes that run `MyWorker` server:
 
-    iex(2)> {:ok, pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, [name: :my_pool])
+    iex(2)> {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, [name: :my_pool])
 
-Each child process is started by `MyWorker.start_link({:worker, :arg})`.
-Then we can get a pid of a child currently not in use.
+Each worker process is started using `MyWorker.start_link({:worker, :arg})`.
+Then we can get a pid of a child currently not in use:
 
     iex(3)> child_pid = PoolSup.checkout(:my_pool)
     iex(4)> do_something(child_pid)
