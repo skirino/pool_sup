@@ -1,6 +1,6 @@
 # PoolSup: Yet another process pool library in [Elixir](http://elixir-lang.org/)
 
-`PoolSup` defines a supervisor specialized to manage pool of workers.
+`PoolSup` defines a supervisor which is specialized to manage pool of worker processes.
 - [API Documentation](http://hexdocs.pm/pool_sup/)
 - [Hex package information](https://hex.pm/packages/pool_sup)
 
@@ -46,3 +46,5 @@ The `PoolSup` process manages 5 worker processes and they will be started by `My
       ...
     ]
     Supervisor.start_link(children, [strategy: :one_for_one])
+
+You can of course define a wrapper function of `PoolSup.start_link/4` and use it in your supervisor spec.

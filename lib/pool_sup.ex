@@ -47,6 +47,8 @@ defmodule PoolSup do
         ...
       ]
       Supervisor.start_link(children, [strategy: :one_for_one])
+
+  You can of course define a wrapper function of `PoolSup.start_link/4` and use it in your supervisor spec.
   """
 
   alias Supervisor, as: S
