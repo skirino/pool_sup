@@ -203,7 +203,7 @@ defmodule PoolSupTest do
       fn -> Process.exit(child, :kill    ) end,
       fn -> GenServer.stop(child, :normal  ) end,
       fn -> GenServer.stop(child, :shutdown) end,
-      # fn -> GenServer.stop(child, :kill    ) end, # This line is disabled just because it generates noisy error logs in test output
+      fn -> GenServer.stop(child, :kill    ) end,
     ])
     try do
       f.()

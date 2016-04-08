@@ -77,7 +77,7 @@ defmodule PoolSup do
   @type  pool      :: pid | GS.name
   @type  options   :: [name: GS.name]
   @typep pid_queue :: :queue.queue(pid)
-  @typep sup_state :: any
+  @typep sup_state :: term
 
   require Record
   Record.defrecordp :state, [
@@ -114,10 +114,7 @@ defmodule PoolSup do
   end
 
   defunp gen_server_opts(opts :: options) :: [name: GS.name] do
-    case opts[:name] do
-      nil  -> []
-      name -> [name: name]
-    end
+    Enum.filter(opts, &match?({:name, _}, &1))
   end
 
   @doc """
@@ -156,7 +153,7 @@ defmodule PoolSup do
 
   The `timeout` parameter is used only in the checkout step; time elapsed during other steps are not counted.
   """
-  defun transaction(pool :: pool, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: any do
+  defun transaction(pool :: pool, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: term do
     pid = checkout(pool, timeout)
     try do
       f.(pid)
