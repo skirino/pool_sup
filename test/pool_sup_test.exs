@@ -40,11 +40,11 @@ defmodule PoolSupTest do
     assert Enum.all?(children, &Process.alive?/1)
 
     # checkin not-working pid => no effect
-    assert PoolSup.status(pid) == %{current_capacity: 3, desired_capacity: 3, available: 3, working: 0}
+    assert PoolSup.status(pid) == %{reserved: 3, children: 3, available: 3, working: 0}
     PoolSup.checkin(pid, self)
-    assert PoolSup.status(pid) == %{current_capacity: 3, desired_capacity: 3, available: 3, working: 0}
+    assert PoolSup.status(pid) == %{reserved: 3, children: 3, available: 3, working: 0}
     PoolSup.checkin(pid, child1)
-    assert PoolSup.status(pid) == %{current_capacity: 3, desired_capacity: 3, available: 3, working: 0}
+    assert PoolSup.status(pid) == %{reserved: 3, children: 3, available: 3, working: 0}
 
     # nonblocking checkout
     worker1 = PoolSup.checkout_nonblock(pid)
@@ -182,13 +182,14 @@ defmodule PoolSupTest do
   end
 
   defp assert_invariance_hold(pid, context, state_before) do
-    {:state, to_decrease, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
+    {:state, reserved, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
     try do
-      assert map_size(all) - to_decrease == context[:capacity]
-      assert data_type_correct?(all, working, available, to_decrease)
+      assert reserved == context[:capacity]
+      assert map_size(all) >= reserved
+      assert data_type_correct?(all, working, available, waiting)
       assert all_corresponds_to_child_pids?(all, sup_state)
       assert union_of_working_and_available_equals_to_all?(all, working, available)
-      assert is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease)
+      assert is_all_processes_count_equal_to_reserved_when_any_child_available?(reserved, all, available)
       assert is_waiting_queue_empty_when_any_child_available?(available, waiting)
     rescue
       e ->
@@ -200,9 +201,10 @@ defmodule PoolSupTest do
     end
   end
 
-  defp data_type_correct?(all, working, available, to_decrease) do
+  defp data_type_correct?(all, working, available, waiting) do
     all_pid? = [Map.keys(all), Map.keys(working), available] |> List.flatten |> Enum.all?(&is_pid/1)
-    all_pid? and is_integer(to_decrease) and to_decrease >= 0
+    all_pairs? = :queue.to_list(waiting) |> Enum.all?(fn {pid, ref} -> is_pid(pid) and is_reference(ref) end)
+    all_pid? and all_pairs?
   end
 
   defp all_corresponds_to_child_pids?(all, sup_state) do
@@ -216,8 +218,8 @@ defmodule PoolSupTest do
     Enum.into(available, working, fn pid -> {pid, true} end) == all
   end
 
-  defp is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease) do
-    Enum.empty?(available) or to_decrease == 0
+  defp is_all_processes_count_equal_to_reserved_when_any_child_available?(reserved, all, available) do
+    map_size(all) == reserved or Enum.empty?(available)
   end
 
   defp is_waiting_queue_empty_when_any_child_available?(available, waiting) do
