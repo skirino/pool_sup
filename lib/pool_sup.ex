@@ -95,7 +95,6 @@ defmodule PoolSup do
     defun member?(set :: t, pid :: pid) :: boolean, do: Map.has_key?(set, pid)
     defun put(set :: t, pid :: pid)     :: t      , do: Map.put(set, pid, true)
     defun delete(set :: t, pid :: pid)  :: t      , do: Map.delete(set, pid)
-    defun from_list(pids :: [pid])      :: t      , do: Enum.into(pids, %{}, &{&1, true})
   end
 
   @type  pool         :: pid | GS.name

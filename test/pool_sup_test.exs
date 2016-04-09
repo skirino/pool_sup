@@ -9,14 +9,22 @@ defmodule PoolSupTest do
     end
   end
 
+  defp shutdown_pool(pool) do
+    childs = Supervisor.which_children(pool) |> Enum.map(fn {_, pid, _, _} -> pid end)
+    Supervisor.stop(pool)
+    refute Process.alive?(pool)
+    refute Enum.any?(childs, &Process.alive?/1)
+  end
+
   test "should behave as an ordinary supervisor" do
     {:ok, pid} = PoolSup.start_link(W, [], 3, 0, [name: __MODULE__])
+
     children = Supervisor.which_children(pid)
     assert length(children) == 3
     assert Supervisor.which_children(pid) == children
     assert Supervisor.count_children(pid)[:active] == 3
-    :ok = Supervisor.stop(pid)
-    refute Process.alive?(pid)
+
+    shutdown_pool(pid)
   end
 
   test "should return error for start_child, terminate_child, restart_child, delete_child" do
@@ -28,9 +36,7 @@ defmodule PoolSupTest do
     assert Supervisor.restart_child(pid, :child)  == {:error, :simple_one_for_one}
     assert Supervisor.delete_child(pid, :child)   == {:error, :simple_one_for_one}
 
-    Supervisor.stop(pid)
-    refute Process.alive?(pid)
-    refute Process.alive?(child)
+    shutdown_pool(pid)
   end
 
   test "should checkout/checkin children" do
@@ -78,10 +84,7 @@ defmodule PoolSupTest do
     end
     refute Process.alive?(checkout_pid2)
 
-    # cleanup
-    Supervisor.stop(pid)
-    refute Process.alive?(pid)
-    refute Enum.any?(children, &Process.alive?/1)
+    shutdown_pool(pid)
   end
 
   test "transaction/3 should correctly checkin child pid" do
@@ -100,10 +103,13 @@ defmodule PoolSupTest do
     assert child_not_in_use?.()
     catch_exit PoolSup.transaction(pid, fn _ -> exit(:baz) end)
     assert child_not_in_use?.()
+
+    shutdown_pool(pid)
   end
 
   test "should spawn ondemand processes when no available worker exists" do
     {:ok, pid} = PoolSup.start_link(W, [], 1, 1)
+
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
     w1 = PoolSup.checkout_nonblocking(pid)
     assert is_pid(w1)
@@ -116,6 +122,8 @@ defmodule PoolSupTest do
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
     PoolSup.checkin(pid, w2)
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
+
+    shutdown_pool(pid)
   end
 
   test "should die when parent process dies" do
@@ -143,6 +151,7 @@ defmodule PoolSupTest do
     state_before = :sys.get_state(pool_pid)
     Process.exit(linked_pid, :shutdown)
     assert :sys.get_state(pool_pid) == state_before
+    shutdown_pool(pool_pid)
   end
 
   test "should not be affected by some info messages" do
@@ -154,6 +163,36 @@ defmodule PoolSupTest do
     mref = Process.monitor(pid)
     send(pid, {:DOWN, mref, :process, self, :shutdown})
     assert :sys.get_state(pid) == state
+
+    shutdown_pool(pid)
+  end
+
+  test "code_change/3 should return an ok-tuple" do
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
+    state = :sys.get_state(pid)
+    {:ok, _} = PoolSup.code_change('0.1.2', state, [])
+    shutdown_pool(pid)
+  end
+
+  test "should pretend as a supervisor when :sys.get_status/1 is called" do
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
+    {:state, _, _, _, _, _, _, sup_state} = :sys.get_state(pid)
+    {:status, _pid, {:module, _mod}, [_pdict, _sysstate, _parent, _dbg, misc]} = :sys.get_status(pid)
+    [_header, _data, {:data, [{'State', state_from_get_status}]}] = misc
+    assert state_from_get_status == sup_state
+
+    # supervisor:get_callback_module/1 since Erlang/OTP 18.3, which internally uses sys:get_status/1
+    otp_version_path = Path.join([:code.root_dir, "releases", :erlang.system_info(:otp_release), "OTP_VERSION"])
+    otp_version =
+      case File.read!(otp_version_path) |> String.rstrip |> String.split(".") |> Enum.map(&String.to_integer/1) do
+        [major, minor]        -> {major, minor, 0    }
+        [major, minor, patch] -> {major, minor, patch}
+      end
+    if otp_version >= {18, 3, 0} do
+      assert :supervisor.get_callback_module(pid) == PoolSup.Callback
+    end
+
+    shutdown_pool(pid)
   end
 
   test "invariance should hold on every step of randomly generated sequence of operations" do
@@ -169,7 +208,7 @@ defmodule PoolSupTest do
         assert_invariance_hold(pid, new_context, state_before)
         new_context
       end)
-      Supervisor.stop(pid)
+      shutdown_pool(pid)
       IO.write(IO.ANSI.green <> "." <> IO.ANSI.reset)
     end)
   end
