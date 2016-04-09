@@ -81,18 +81,18 @@ defmodule PoolSup do
 
   require Record
   Record.defrecordp :state, [
+    :capacity_to_decrease,
     :all,
     :working,
     :available,
-    :capacity_to_decrease,
     :waiting,
     :sup_state,
   ]
   @typep state :: record(:state,
+    capacity_to_decrease: non_neg_integer,
     all:                  PidSet.t,
     working:              PidSet.t,
     available:            [pid],
-    capacity_to_decrease: non_neg_integer,
     waiting:              pid_queue,
     sup_state:            sup_state,
   )
@@ -202,7 +202,7 @@ defmodule PoolSup do
   defunp make_state(capacity :: non_neg_integer, sup_state :: sup_state) :: state do
     {pids, new_sup_state} = prepare_children(capacity, [], sup_state)
     all = PidSet.from_list(pids)
-    state(all: all, working: PidSet.new, available: pids, capacity_to_decrease: 0, waiting: :queue.new, sup_state: new_sup_state)
+    state(capacity_to_decrease: 0, all: all, working: PidSet.new, available: pids, waiting: :queue.new, sup_state: new_sup_state)
   end
 
   defunp prepare_children(capacity :: non_neg_integer, pids :: [pid], sup_state :: sup_state) :: {[pid], sup_state} do
@@ -229,7 +229,7 @@ defmodule PoolSup do
     end
   end
   def handle_call(:status, _from,
-                  state(all: all, available: available, working: working, capacity_to_decrease: to_decrease) = s) do
+                  state(capacity_to_decrease: to_decrease, all: all, available: available, working: working) = s) do
     current_capacity = map_size(all)
     r = %{
       current_capacity: current_capacity,
@@ -311,10 +311,10 @@ defmodule PoolSup do
   end
 
   def handle_cast({:checkin, pid},
-                  state(all: all,
+                  state(capacity_to_decrease: to_decrease,
+                        all: all,
                         working: working,
                         available: available,
-                        capacity_to_decrease: to_decrease,
                         waiting: waiting,
                         sup_state: sup_state) = s) do
     if PidSet.member?(working, pid) do
@@ -331,7 +331,7 @@ defmodule PoolSup do
         else
           working2 = PidSet.delete(working, pid)
           new_sup_state = terminate_child(pid, sup_state)
-          state(s, all: PidSet.delete(all, pid), working: working2, capacity_to_decrease: to_decrease - 1, sup_state: new_sup_state)
+          state(s, capacity_to_decrease: to_decrease - 1, all: PidSet.delete(all, pid), working: working2, sup_state: new_sup_state)
         end
       {:noreply, new_state}
     else
@@ -361,10 +361,10 @@ defmodule PoolSup do
     end
   end
 
-  defunp handle_child_exited(state(all:                  all,
+  defunp handle_child_exited(state(capacity_to_decrease: to_decrease,
+                                   all:                  all,
                                    working:              working,
                                    available:            available,
-                                   capacity_to_decrease: to_decrease,
                                    waiting:              waiting,
                                    sup_state:            sup_state) = s :: state,
                              child_pid :: pid) :: state do
@@ -387,7 +387,7 @@ defmodule PoolSup do
           state(s, all: all3, working: working2, available: available3, sup_state: new_sup_state)
       end
     else
-      state(s, all: all2, working: working2, available: available2, capacity_to_decrease: to_decrease - 1)
+      state(s, capacity_to_decrease: to_decrease - 1, all: all2, working: working2, available: available2)
     end
   end
 

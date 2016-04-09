@@ -35,7 +35,7 @@ defmodule PoolSupTest do
 
   test "should checkout/checkin children" do
     {:ok, pid} = PoolSup.start_link(W, [], 3)
-    {:state, _, _, children, _, _, _} = :sys.get_state(pid)
+    {:state, _, _, _, children, _, _} = :sys.get_state(pid)
     [child1, _child2, _child3] = children
     assert Enum.all?(children, &Process.alive?/1)
 
@@ -182,7 +182,7 @@ defmodule PoolSupTest do
   end
 
   defp assert_invariance_hold(pid, context, state_before) do
-    {:state, all, working, available, to_decrease, waiting, sup_state} = state_after = :sys.get_state(pid)
+    {:state, to_decrease, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
     try do
       assert map_size(all) - to_decrease == context[:capacity]
       assert data_type_correct?(all, working, available, to_decrease)
@@ -195,7 +195,7 @@ defmodule PoolSupTest do
         commands_so_far = Enum.reverse(context[:cmds])
         IO.puts "commands executed so far = #{inspect(commands_so_far, pretty: true)}"
         IO.inspect(state_before, pretty: true)
-        IO.inspect(state_after, pretty: true)
+        IO.inspect(state_after , pretty: true)
         raise e
     end
   end
@@ -305,7 +305,7 @@ defmodule PoolSupTest do
   end
 
   def cmd_kill_idle_worker(context) do
-    {:state, all, working, _, _, _, _} = :sys.get_state(context[:pid])
+    {:state, _, all, working, _, _, _} = :sys.get_state(context[:pid])
     idle_workers = Map.keys(all) -- Map.keys(working)
     if !Enum.empty?(idle_workers) do
       worker = Enum.random(idle_workers)
