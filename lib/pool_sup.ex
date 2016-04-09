@@ -267,12 +267,21 @@ defmodule PoolSup do
     {:reply, pid, state(s, working: PidSet.put(working, pid), available: pids)}
   end
 
-  defunp increase_children(to_increase :: non_neg_integer, state(all: all, available: available, sup_state: sup_state) = s :: state) :: state do
+  defunp increase_children(to_increase :: non_neg_integer,
+                           state(all: all, working: working, available: available, waiting: waiting, sup_state: sup_state) = s :: state) :: state do
     if to_increase == 0 do
       state(s, capacity_to_decrease: 0)
     else
       {pid, new_sup_state} = start_child(sup_state)
-      new_state = state(s, all: PidSet.put(all, pid), available: [pid | available], sup_state: new_sup_state)
+      all2 = PidSet.put(all, pid)
+      new_state =
+        case :queue.out(waiting) do
+          {{:value, wait_pid}, waiting2} ->
+            GenServer.reply(wait_pid, pid)
+            state(s, all: all2, working: PidSet.put(working, pid), waiting: waiting2, sup_state: new_sup_state)
+          {:empty, _} ->
+            state(s, all: all2, available: [pid | available], sup_state: new_sup_state)
+        end
       increase_children(to_increase - 1, new_state)
     end
   end

@@ -140,7 +140,7 @@ defmodule PoolSupTest do
     assert :sys.get_state(pid) == state
   end
 
-  test "invariance should hold on every step" do
+  test "invariance should hold on every step of randomly generated sequence of operations" do
     Enum.each(1..10, fn _ ->
       initial_capacity = pick_capacity
       {:ok, pid} = PoolSup.start_link(W, [], initial_capacity)
