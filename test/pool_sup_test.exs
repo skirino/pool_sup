@@ -10,7 +10,7 @@ defmodule PoolSupTest do
   end
 
   test "should behave as an ordinary supervisor" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, [name: __MODULE__])
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0, [name: __MODULE__])
     children = Supervisor.which_children(pid)
     assert length(children) == 3
     assert Supervisor.which_children(pid) == children
@@ -20,7 +20,7 @@ defmodule PoolSupTest do
   end
 
   test "should return error for start_child, terminate_child, restart_child, delete_child" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3)
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
     {_, child, _, _} = Supervisor.which_children(pid) |> hd
 
     assert Supervisor.start_child(pid, [])        == {:error, :pool_sup}
@@ -34,17 +34,17 @@ defmodule PoolSupTest do
   end
 
   test "should checkout/checkin children" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3)
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
     {:state, _, _, _, _, children, _, _} = :sys.get_state(pid)
     [child1, _child2, _child3] = children
     assert Enum.all?(children, &Process.alive?/1)
 
     # checkin not-working pid => no effect
-    assert PoolSup.status(pid) == %{reserved: 3, children: 3, available: 3, working: 0}
+    assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
     PoolSup.checkin(pid, self)
-    assert PoolSup.status(pid) == %{reserved: 3, children: 3, available: 3, working: 0}
+    assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
     PoolSup.checkin(pid, child1)
-    assert PoolSup.status(pid) == %{reserved: 3, children: 3, available: 3, working: 0}
+    assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
 
     # nonblocking checkout
     worker1 = PoolSup.checkout_nonblock(pid)
@@ -85,7 +85,7 @@ defmodule PoolSupTest do
   end
 
   test "transaction/3 should correctly checkin child pid" do
-    {:ok, pid} = PoolSup.start_link(W, [], 1)
+    {:ok, pid} = PoolSup.start_link(W, [], 1, 0)
     child_not_in_use? = fn ->
       child = PoolSup.checkout(pid)
       PoolSup.checkin(pid, child)
@@ -102,8 +102,24 @@ defmodule PoolSupTest do
     assert child_not_in_use?.()
   end
 
+  test "should spawn ondemand processes when no available worker exists" do
+    {:ok, pid} = PoolSup.start_link(W, [], 1, 1)
+    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
+    w1 = PoolSup.checkout_nonblock(pid)
+    assert is_pid(w1)
+    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
+    w2 = PoolSup.checkout_nonblock(pid)
+    assert is_pid(w2)
+    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 2, working: 2, available: 0}
+    assert PoolSup.checkout_nonblock(pid) == nil
+    PoolSup.checkin(pid, w1)
+    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
+    PoolSup.checkin(pid, w2)
+    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
+  end
+
   test "should die when parent process dies" do
-    spec = Supervisor.Spec.supervisor(PoolSup, [W, [], 3])
+    spec = Supervisor.Spec.supervisor(PoolSup, [W, [], 3, 0])
     {:ok, parent_pid} = Supervisor.start_link([spec], strategy: :one_for_one)
     assert Process.alive?(parent_pid)
     [{PoolSup, pool_pid, :supervisor, [PoolSup]}] = Supervisor.which_children(parent_pid)
@@ -119,7 +135,7 @@ defmodule PoolSupTest do
   end
 
   test "should not be affected when other linked process dies" do
-    {:ok, pool_pid} = PoolSup.start_link(W, [], 3)
+    {:ok, pool_pid} = PoolSup.start_link(W, [], 3, 0)
     linked_pid = spawn(fn ->
       Process.link(pool_pid)
       :timer.sleep(10_000)
@@ -130,7 +146,7 @@ defmodule PoolSupTest do
   end
 
   test "should not be affected by some info messages" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3)
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
     state = :sys.get_state(pid)
     send(pid, :timeout)
     assert :sys.get_state(pid) == state
@@ -141,10 +157,11 @@ defmodule PoolSupTest do
   end
 
   test "invariance should hold on every step of randomly generated sequence of operations" do
-    Enum.each(1..10, fn _ ->
-      initial_reserved = pick_reserved
-      {:ok, pid} = PoolSup.start_link(W, [], initial_reserved)
-      initial_context = %{reserved: initial_reserved, pid: pid, checked_out: [], waiting: :queue.new, cmds: [start: [initial_reserved]]}
+    Enum.each(1..30, fn _ ->
+      initial_reserved = pick_capacity_initial
+      initial_ondemand = pick_capacity_initial
+      {:ok, pid} = PoolSup.start_link(W, [], initial_reserved, initial_ondemand)
+      initial_context = initial_context(pid, initial_reserved, initial_ondemand)
       assert_invariance_hold(pid, initial_context, nil)
       Enum.reduce(1..100, initial_context, fn(_, context) ->
         state_before = :sys.get_state(pid)
@@ -152,16 +169,18 @@ defmodule PoolSupTest do
         assert_invariance_hold(pid, new_context, state_before)
         new_context
       end)
-      :ok = Supervisor.stop(pid)
+      Supervisor.stop(pid)
       IO.write(IO.ANSI.green <> "." <> IO.ANSI.reset)
     end)
   end
 
-  @max_reserved 5
-
-  defp pick_reserved do
-    :rand.uniform(@max_reserved + 1) - 1
+  defp initial_context(pid, reserved, ondemand) do
+    %{pid: pid, reserved: reserved, ondemand: ondemand, checked_out: [], waiting: :queue.new, cmds: [start: [reserved, ondemand]]}
   end
+
+  @capacity_values [0, 1, 2, 3, 5, 10]
+  defp pick_capacity_initial, do: Enum.random(@capacity_values)
+  defp pick_capacity        , do: Enum.random([nil | @capacity_values])
 
   defp pick_cmd do
     Enum.random([
@@ -169,7 +188,7 @@ defmodule PoolSupTest do
       cmd_checkout_or_catch:   [],
       cmd_checkout_wait:       [],
       cmd_checkin:             [],
-      cmd_change_capacity:     [pick_reserved],
+      cmd_change_capacity:     [pick_capacity, pick_capacity],
       cmd_kill_running_worker: [],
       cmd_kill_idle_worker:    [],
     ])
@@ -182,7 +201,7 @@ defmodule PoolSupTest do
   end
 
   defp assert_invariance_hold(pid, context, state_before) do
-    {:state, reserved, _ondemand, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
+    {:state, reserved, ondemand, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
     try do
       assert reserved == context[:reserved]
       assert map_size(all) >= reserved
@@ -191,6 +210,7 @@ defmodule PoolSupTest do
       assert union_of_working_and_available_equals_to_all?(all, working, available)
       assert is_all_processes_count_equal_to_reserved_when_any_child_available?(reserved, all, available)
       assert is_waiting_queue_empty_when_any_child_available?(available, waiting)
+      assert is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting)
     rescue
       e ->
         commands_so_far = Enum.reverse(context[:cmds])
@@ -226,10 +246,14 @@ defmodule PoolSupTest do
     Enum.empty?(available) or :queue.is_empty(waiting)
   end
 
+  defp is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting) do
+    map_size(all) >= reserved + ondemand or :queue.is_empty(waiting)
+  end
+
   def cmd_checkout_nonblock(context) do
     checked_out = context[:checked_out]
     pid = PoolSup.checkout_nonblock(context[:pid])
-    if length(checked_out) >= context[:reserved] do
+    if length(checked_out) >= context[:reserved] + context[:ondemand] do
       assert pid == nil
       context
     else
@@ -240,7 +264,7 @@ defmodule PoolSupTest do
 
   def cmd_checkout_or_catch(context) do
     checked_out = context[:checked_out]
-    if length(checked_out) >= context[:reserved] do
+    if length(checked_out) >= context[:reserved] + context[:ondemand] do
       catch_exit PoolSup.checkout(context[:pid], 10)
       context
     else
@@ -252,7 +276,7 @@ defmodule PoolSupTest do
 
   def cmd_checkout_wait(context) do
     checked_out = context[:checked_out]
-    if length(checked_out) >= context[:reserved] do
+    if length(checked_out) >= context[:reserved] + context[:ondemand] do
       self_pid = self
       checkout_pid = spawn(fn ->
         worker_pid = PoolSup.checkout(context[:pid], :infinity)
@@ -278,21 +302,10 @@ defmodule PoolSupTest do
     end
   end
 
-  defp receive_msg_from_waiting_processes(context) do
-    receive do
-      {waiting_pid, checked_out_pid} ->
-        new_checked_out = [checked_out_pid | context[:checked_out]]
-        new_waiting = :queue.filter(fn w -> w != waiting_pid end, context[:waiting])
-        new_context = %{context | checked_out: new_checked_out, waiting: new_waiting}
-        receive_msg_from_waiting_processes(new_context)
-    after
-      10 -> context
-    end
-  end
-
-  def cmd_change_capacity(context, new_reserved) do
-    PoolSup.change_capacity(context[:pid], new_reserved)
-    %{context | reserved: new_reserved} |> receive_msg_from_waiting_processes
+  def cmd_change_capacity(context, new_reserved, new_ondemand) do
+    PoolSup.change_capacity(context[:pid], new_reserved, new_ondemand)
+    %{context | reserved: new_reserved || context[:reserved], ondemand: new_ondemand || context[:ondemand]}
+    |> receive_msg_from_waiting_processes
   end
 
   def cmd_kill_running_worker(context) do
@@ -330,5 +343,17 @@ defmodule PoolSupTest do
       :exit, _ -> :ok # child is doubly killed (when decreasing capacity in PoolSup and here)
     end
     :timer.sleep(1) # necessary for the pool process to handle EXIT message prior to the next test step
+  end
+
+  defp receive_msg_from_waiting_processes(context) do
+    receive do
+      {waiting_pid, checked_out_pid} ->
+        new_checked_out = [checked_out_pid | context[:checked_out]]
+        new_waiting = :queue.filter(fn w -> w != waiting_pid end, context[:waiting])
+        new_context = %{context | checked_out: new_checked_out, waiting: new_waiting}
+        receive_msg_from_waiting_processes(new_context)
+    after
+      10 -> context
+    end
   end
 end

@@ -76,7 +76,8 @@ defmodule PoolSup do
 
   @type  pool         :: pid | GS.name
   @type  options      :: [name: GS.name]
-  @typep client_queue :: :queue.queue({pid, reference})
+  @typep client       :: {pid, reference}
+  @typep client_queue :: :queue.queue(client)
   @typep sup_state    :: term
 
   require Record
@@ -111,8 +112,12 @@ defmodule PoolSup do
   - `capacity` is the initial number of workers this `PoolSup` process holds.
   - Currently only `:name` option is supported for name registration.
   """
-  defun start_link(worker_module :: g[module], worker_init_arg :: term, capacity :: g[non_neg_integer], options :: options \\ []) :: GS.on_start do
-    GS.start_link(__MODULE__, {worker_module, worker_init_arg, capacity, options}, gen_server_opts(options))
+  defun start_link(worker_module   :: g[module],
+                   worker_init_arg :: term,
+                   reserved        :: g[non_neg_integer],
+                   ondemand        :: g[non_neg_integer],
+                   options         :: options \\ []) :: GS.on_start do
+    GS.start_link(__MODULE__, {worker_module, worker_init_arg, reserved, ondemand, options}, gen_server_opts(options))
   end
 
   defunp gen_server_opts(opts :: options) :: [name: GS.name] do
@@ -126,7 +131,7 @@ defmodule PoolSup do
   - any process becomes available, or
   - timeout is reached.
   """
-  defun checkout(pool :: pool, timeout :: timeout \\ 5000) :: nil | pid do
+  defun checkout(pool :: pool, timeout :: timeout \\ 5000) :: pid do
     try do
       GenServer.call(pool, :checkout, timeout)
     catch
@@ -167,7 +172,7 @@ defmodule PoolSup do
   @doc """
   Query current status of a pool.
   """
-  defun status(pool :: pool) :: %{children: nni, available: nni, working: nni, reserved: nni} when nni: non_neg_integer do
+  defun status(pool :: pool) :: %{reserved: nni, ondemand: nni, children: nni, available: nni, working: nni} when nni: non_neg_integer do
     GenServer.call(pool, :status)
   end
 
@@ -182,16 +187,19 @@ defmodule PoolSup do
   Processes currently in use are never interrupted.
   If number of in-use workers is more than `new_capacity`, reducing further is delayed until any worker process is checked in.
   """
-  defun change_capacity(pool :: pool, new_capacity :: g[non_neg_integer]) :: :ok do
-    GenServer.call(pool, {:change_capacity, new_capacity})
+  defun change_capacity(pool :: pool, new_reserved :: nil | non_neg_integer, new_ondemand :: nil | non_neg_integer) :: :ok do
+    (_pool, nil, nil) -> :ok
+    (pool , r  , o  ) when (is_nil(r) or is_integer(r) and r >= 0) and (is_nil(o) or is_integer(o) and o >= 0) ->
+      GenServer.cast(pool, {:change_capacity, r, o})
   end
 
   #
   # gen_server callbacks
   #
-  def init({mod, init_arg, capacity, opts}) do
+  def init({mod, init_arg, reserved, ondemand, opts}) do
     {:ok, sup_state} = :supervisor.init(supervisor_init_arg(mod, init_arg, opts))
-    {:ok, make_state(capacity, sup_state)}
+    s = state(reserved: reserved, ondemand: ondemand, all: PidSet.new, working: PidSet.new, available: [], waiting: :queue.new, sup_state: sup_state)
+    {:ok, restock_children_upto_reserved(s)}
   end
 
   defp supervisor_init_arg(mod, init_arg, opts) do
@@ -201,52 +209,40 @@ defmodule PoolSup do
     {sup_name, Callback, [spec]}
   end
 
-  defunp make_state(capacity :: non_neg_integer, sup_state :: sup_state) :: state do
-    {pids, new_sup_state} = prepare_children(capacity, [], sup_state)
-    all = PidSet.from_list(pids)
-    state(reserved: capacity, all: all, working: PidSet.new, available: pids, waiting: :queue.new, sup_state: new_sup_state)
-  end
-
-  defunp prepare_children(capacity :: non_neg_integer, pids :: [pid], sup_state :: sup_state) :: {[pid], sup_state} do
-    if capacity == 0 do
-      {pids, sup_state}
-    else
-      {pid, new_sup_state} = start_child(sup_state)
-      prepare_children(capacity - 1, [pid | pids], new_sup_state)
-    end
-  end
-
-  def handle_call(:checkout_nonblock, _from, state(available: available) = s) do
+  def handle_call(:checkout_nonblock, _from,
+                  state(reserved: reserved, ondemand: ondemand, all: all, available: available) = s) do
     case available do
-      [pid | pids] -> reply_with_pid(pid, pids, s)
-      []           -> {:reply, nil, s}
-    end
-  end
-  def handle_call(:checkout, from, state(available: available, waiting: waiting) = s) do
-    case available do
-      [pid | pids] -> reply_with_pid(pid, pids, s)
+      [pid | pids] -> reply_with_available_worker(pid, pids, s)
       []           ->
-        new_state = state(s, waiting: :queue.in(from, waiting))
-        {:noreply, new_state}
+        if map_size(all) < reserved + ondemand do
+          reply_with_ondemand_worker(s)
+        else
+          {:reply, nil, s}
+        end
+    end
+  end
+  def handle_call(:checkout, from,
+                  state(reserved: reserved, ondemand: ondemand, all: all, available: available, waiting: waiting) = s) do
+    case available do
+      [pid | pids] -> reply_with_available_worker(pid, pids, s)
+      []           ->
+        if map_size(all) < reserved + ondemand do
+          reply_with_ondemand_worker(s)
+        else
+          {:noreply, state(s, waiting: :queue.in(from, waiting))}
+        end
     end
   end
   def handle_call(:status, _from,
-                  state(reserved: reserved, all: all, available: available, working: working) = s) do
+                  state(reserved: reserved, ondemand: ondemand, all: all, available: available, working: working) = s) do
     r = %{
       reserved:  reserved,
+      ondemand:  ondemand,
       children:  map_size(all),
       available: length(available),
       working:   map_size(working),
     }
     {:reply, r, s}
-  end
-  def handle_call({:change_capacity, new_reserved}, _from, state(all: all) = s) do
-    s2 = state(s, reserved: new_reserved)
-    case new_reserved - map_size(all) do
-      0                  -> {:reply, :ok, s2}
-      diff when diff > 0 -> {:reply, :ok, increase_children(s2)}
-      _                  -> {:reply, :ok, decrease_children(s2)}
-    end
   end
   def handle_call({:start_child, _}, _from, s) do
     {:reply, {:error, :pool_sup}, s}
@@ -260,74 +256,38 @@ defmodule PoolSup do
     {:reply, reply, state(s, sup_state: new_sup_state)}
   end
 
-  defunp reply_with_pid(pid :: pid, pids :: [pid], state(working: working) = s :: state) :: {:reply, pid, state} do
+  defunp reply_with_available_worker(pid :: pid, pids :: [pid], state(working: working) = s :: state) :: {:reply, pid, state} do
     {:reply, pid, state(s, working: PidSet.put(working, pid), available: pids)}
   end
 
-  defunp increase_children(state(reserved: reserved, all: all, working: working, available: available, waiting: waiting, sup_state: sup_state) = s :: state) :: state do
-    if map_size(all) == reserved do
-      s
-    else
-      {pid, new_sup_state} = start_child(sup_state)
-      all2 = PidSet.put(all, pid)
-      new_state =
-        case :queue.out(waiting) do
-          {{:value, wait_pid}, waiting2} ->
-            GenServer.reply(wait_pid, pid)
-            state(s, all: all2, working: PidSet.put(working, pid), waiting: waiting2, sup_state: new_sup_state)
-          {:empty, _} ->
-            state(s, all: all2, available: [pid | available], sup_state: new_sup_state)
-        end
-      increase_children(new_state)
-    end
-  end
-
-  defunp start_child(sup_state :: sup_state) :: {pid, sup_state} do
-    {:reply, {:ok, pid}, new_sup_state} = :supervisor.handle_call({:start_child, []}, self, sup_state)
-    {pid, new_sup_state}
-  end
-
-  defunp decrease_children(state(reserved: reserved, all: all, available: available, sup_state: sup_state) = s :: state) :: state do
-    if map_size(all) == reserved do
-      s
-    else
-      case available do
-        []           -> s # can't decrease children now
-        [pid | pids] ->
-          new_sup_state = terminate_child(pid, sup_state)
-          new_state = state(s, all: PidSet.delete(all, pid), available: pids, sup_state: new_sup_state)
-          decrease_children(new_state)
-      end
-    end
-  end
-
-  defunp terminate_child(pid :: pid, sup_state :: sup_state) :: sup_state do
-    {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, self, sup_state)
-    new_sup_state
+  defunp reply_with_ondemand_worker(state(all: all, working: working, sup_state: sup_state) = s :: state) :: {:reply, pid, state} do
+    {new_child_pid, new_sup_state} = start_child(sup_state)
+    s2 = state(s, all: PidSet.put(all, new_child_pid), working: PidSet.put(working, new_child_pid), sup_state: new_sup_state)
+    {:reply, new_child_pid, s2}
   end
 
   def handle_cast({:checkin, pid},
-                  state(reserved: reserved,
-                        all: all,
-                        working: working,
+                  state(reserved:  reserved,
+                        ondemand:  ondemand,
+                        all:       all,
+                        working:   working,
                         available: available,
-                        waiting: waiting,
-                        sup_state: sup_state) = s) do
+                        waiting:   waiting) = s) do
     if PidSet.member?(working, pid) do
-      new_state =
-        if map_size(all) == reserved do
+      size_all = map_size(all)
+      new_state = cond do
+        size_all > reserved + ondemand ->
+          terminate_checked_in_child(s, pid)
+        size_all > reserved ->
           case :queue.out(waiting) do
-            {{:value, wait_pid}, waiting2} ->
-              GenServer.reply(wait_pid, pid)
-              state(s, waiting: waiting2)
-            {:empty, _} ->
-              working2 = PidSet.delete(working, pid)
-              state(s, working: working2, available: [pid | available])
+            {:empty, _}                  -> terminate_checked_in_child(s, pid)
+            {{:value, client}, waiting2} -> send_reply_with_checked_in_child(s, pid, client, waiting2)
           end
-        else # map_size(all) > reserved: try to decrease children
-          working2 = PidSet.delete(working, pid)
-          new_sup_state = terminate_child(pid, sup_state)
-          state(s, all: PidSet.delete(all, pid), working: working2, sup_state: new_sup_state)
+        :otherwise ->
+          case :queue.out(waiting) do
+            {:empty, _}                  -> state(s, working: PidSet.delete(working, pid), available: [pid | available])
+            {{:value, client}, waiting2} -> send_reply_with_checked_in_child(s, pid, client, waiting2)
+          end
         end
       {:noreply, new_state}
     else
@@ -337,6 +297,67 @@ defmodule PoolSup do
   def handle_cast({:cancel_waiting, pid}, state(waiting: waiting) = s) do
     new_waiting = :queue.filter(&(&1 == pid), waiting)
     {:noreply, state(s, waiting: new_waiting)}
+  end
+  def handle_cast({:change_capacity, new_reserved, new_ondemand}, s) do
+    s2 = case {new_reserved, new_ondemand} do
+      {nil, o  } -> state(s,              ondemand: o)
+      {r  , nil} -> state(s, reserved: r             )
+      {r  , o  } -> state(s, reserved: r, ondemand: o)
+    end
+    {:noreply, handle_capacity_change(s2)}
+  end
+
+  defunp terminate_checked_in_child(state(all: all, working: working, sup_state: sup_state) = s :: state, pid :: pid) :: state do
+    state(s, all: PidSet.delete(all, pid), working: PidSet.delete(working, pid), sup_state: terminate_child(pid, sup_state))
+  end
+
+  defunp send_reply_with_checked_in_child(s :: state, pid :: pid, client :: client, waiting :: client_queue) :: state do
+    GenServer.reply(client, pid)
+    state(s, waiting: waiting)
+  end
+
+  defunp handle_capacity_change(state(available: available) = s :: state) :: state do
+    if Enum.empty?(available) do
+      send_reply_to_waiting_clients_by_spawn(s)
+    else
+      terminate_extra_children(s) # As `available` worker exists, no client is currently waiting
+    end
+    |> restock_children_upto_reserved
+  end
+
+  defunp send_reply_to_waiting_clients_by_spawn(state(reserved: reserved,
+                                                      ondemand: ondemand,
+                                                      all:      all,
+                                                      waiting:  waiting) = s :: state) :: state do
+    case :queue.out(waiting) do
+      {:empty, _}                  -> s
+      {{:value, client}, waiting2} ->
+        if map_size(all) < reserved + ondemand do
+          send_reply_with_new_child(s, client, waiting2) |> send_reply_to_waiting_clients_by_spawn
+        else
+          s
+        end
+    end
+  end
+
+  defunp terminate_extra_children(state(reserved: reserved, all: all, available: available, sup_state: sup_state) = s :: state) :: state do
+    case available do
+      []           -> s
+      [pid | pids] ->
+        if map_size(all) > reserved do
+          state(s, all: PidSet.delete(all, pid), available: pids, sup_state: terminate_child(pid, sup_state)) |> terminate_extra_children
+        else
+          s
+        end
+    end
+  end
+
+  defunp restock_children_upto_reserved(state(reserved: reserved, all: all) = s :: state) :: state do
+    if map_size(all) < reserved do
+      restock_child(s) |> restock_children_upto_reserved
+    else
+      s
+    end
   end
 
   def handle_info(msg, state(sup_state: sup_state) = s) do
@@ -358,11 +379,11 @@ defmodule PoolSup do
   end
 
   defunp handle_child_exited(state(reserved:  reserved,
+                                   ondemand:  ondemand,
                                    all:       all,
                                    working:   working,
                                    available: available,
-                                   waiting:   waiting,
-                                   sup_state: sup_state) = s :: state,
+                                   waiting:   waiting) = s :: state,
                              child_pid :: pid) :: state do
     {working2, available2} =
       case PidSet.member?(working, child_pid) do
@@ -370,21 +391,44 @@ defmodule PoolSup do
         false -> {working, List.delete(available, child_pid)}
       end
     all2 = PidSet.delete(all, child_pid)
-    if map_size(all) == reserved do
-      {new_child_pid, new_sup_state} = start_child(sup_state)
-      all3 = PidSet.put(all2, new_child_pid)
-      case :queue.out(waiting) do
-        {{:value, wait_pid}, waiting2} ->
-          GenServer.reply(wait_pid, new_child_pid)
-          working3 = PidSet.put(working2, new_child_pid)
-          state(s, all: all3, working: working3, available: available2, waiting: waiting2, sup_state: new_sup_state)
-        {:empty, _} ->
-          available3 = [new_child_pid | available2]
-          state(s, all: all3, working: working2, available: available3, sup_state: new_sup_state)
-      end
-    else
-      state(s, all: all2, working: working2, available: available2)
+    s2 = state(s, all: all2, working: working2, available: available2)
+    size_all = map_size(all2)
+    cond do
+      size_all >= reserved + ondemand ->
+        s2
+      size_all >= reserved ->
+        case :queue.out(waiting) do
+          {:empty, _}                  -> s2
+          {{:value, client}, waiting2} -> send_reply_with_new_child(s2, client, waiting2)
+        end
+      :otherwise ->
+        case :queue.out(waiting) do
+          {:empty, _}                  -> restock_child(s2)
+          {{:value, client}, waiting2} -> send_reply_with_new_child(s2, client, waiting2)
+        end
     end
+  end
+
+  defunp send_reply_with_new_child(state(all: all, working: working, sup_state: sup_state) = s :: state,
+                                   client :: client, waiting :: client_queue) :: state do
+    {pid, new_sup_state} = start_child(sup_state)
+    GenServer.reply(client, pid)
+    state(s, all: PidSet.put(all, pid), working: PidSet.put(working, pid), waiting: waiting, sup_state: new_sup_state)
+  end
+
+  defunp restock_child(state(all: all, available: available, sup_state: sup_state) = s :: state) :: state do
+    {pid, new_sup_state} = start_child(sup_state)
+    state(s, all: PidSet.put(all, pid), available: [pid | available], sup_state: new_sup_state)
+  end
+
+  defunp start_child(sup_state :: sup_state) :: {pid, sup_state} do
+    {:reply, {:ok, pid}, new_sup_state} = :supervisor.handle_call({:start_child, []}, self, sup_state)
+    {pid, new_sup_state}
+  end
+
+  defunp terminate_child(pid :: pid, sup_state :: sup_state) :: sup_state do
+    {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, self, sup_state)
+    new_sup_state
   end
 
   def terminate(reason, state(sup_state: sup_state)) do
