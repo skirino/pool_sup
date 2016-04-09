@@ -297,30 +297,9 @@ defmodule PoolSup do
     {:reply, new_child_pid, s2}
   end
 
-  def handle_cast({:checkin, pid},
-                  state(reserved:  reserved,
-                        ondemand:  ondemand,
-                        all:       all,
-                        working:   working,
-                        available: available,
-                        waiting:   waiting) = s) do
+  def handle_cast({:checkin, pid}, state(working: working) = s) do
     if PidSet.member?(working, pid) do
-      size_all = map_size(all)
-      new_state = cond do
-        size_all > reserved + ondemand ->
-          terminate_checked_in_child(s, pid)
-        size_all > reserved ->
-          case :queue.out(waiting) do
-            {:empty, _}                  -> terminate_checked_in_child(s, pid)
-            {{:value, client}, waiting2} -> send_reply_with_checked_in_child(s, pid, client, waiting2)
-          end
-        :otherwise ->
-          case :queue.out(waiting) do
-            {:empty, _}                  -> state(s, working: PidSet.delete(working, pid), available: [pid | available])
-            {{:value, client}, waiting2} -> send_reply_with_checked_in_child(s, pid, client, waiting2)
-          end
-        end
-      {:noreply, new_state}
+      {:noreply, handle_worker_checkin(s, pid)}
     else
       {:noreply, s}
     end
@@ -336,6 +315,30 @@ defmodule PoolSup do
       {r  , o  } -> state(s, reserved: r, ondemand: o)
     end
     {:noreply, handle_capacity_change(s2)}
+  end
+
+  defunp handle_worker_checkin(state(reserved:  reserved,
+                                     ondemand:  ondemand,
+                                     all:       all,
+                                     working:   working,
+                                     available: available,
+                                     waiting:   waiting) = s :: state,
+                               pid :: pid) :: state do
+    size_all = map_size(all)
+    cond do
+      size_all > reserved + ondemand ->
+        terminate_checked_in_child(s, pid)
+      size_all > reserved ->
+        case :queue.out(waiting) do
+          {:empty, _}                  -> terminate_checked_in_child(s, pid)
+          {{:value, client}, waiting2} -> send_reply_with_checked_in_child(s, pid, client, waiting2)
+        end
+      :otherwise ->
+        case :queue.out(waiting) do
+          {:empty, _}                  -> state(s, working: PidSet.delete(working, pid), available: [pid | available])
+          {{:value, client}, waiting2} -> send_reply_with_checked_in_child(s, pid, client, waiting2)
+        end
+    end
   end
 
   defunp terminate_checked_in_child(state(all: all, working: working, sup_state: sup_state) = s :: state, pid :: pid) :: state do
