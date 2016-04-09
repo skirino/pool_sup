@@ -4,10 +4,14 @@ defmodule PoolSup do
   @moduledoc """
   This module defines a supervisor process that is specialized to manage pool of workers.
 
+  ## Features
+
   - Process defined by this module behaves as a `:simple_one_for_one` supervisor.
   - Worker processes are spawned using a callback module that implements `PoolSup.Worker` behaviour.
-  - The `PoolSup` process manages which child processes are in use and which are not.
-  - Functions to request pid of a child process that is not in use are also defined (`checkout/2`, `checkout_nonblock/2`).
+  - `PoolSup` process manages which worker processes are in use and which are not.
+  - `PoolSup` automatically restart crashed workers.
+  - Functions to request pid of an available worker process: `checkout/2`, `checkout_nonblocking/2`.
+  - Run-time configuration of pool size: `change_capacity/2`.
 
   ## Example
 
@@ -25,7 +29,7 @@ defmodule PoolSup do
 
   When we want to have 3 worker processes that run `MyWorker` server:
 
-      iex(2)> {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, [name: :my_pool])
+      iex(2)> {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, 0, [name: :my_pool])
 
   Each worker process is started using `MyWorker.start_link({:worker, :arg})`.
   Then we can get a pid of a child currently not in use:
@@ -36,17 +40,37 @@ defmodule PoolSup do
 
   Don't forget to return the `child_pid` when finished; for simple use cases `PoolSup.transaction/3` comes in handy.
 
-  ### Usage within supervision tree
+  ## Reserved and on-demand worker processes
 
-  The following code snippet spawns a supervisor that has `PoolSup` process as one of its children.
-  The `PoolSup` process manages 5 worker processes and they will be started by `MyWorker.start_link({:worker, :arg})`.
+  `PoolSup` defines the following two parameters to control capacity of a pool:
+
+  - `reserved` (3rd argument of `start_link/5`): Number of workers to keep alive.
+  - `ondemand` (4th argument of `start_link/5`): Maximum number of workers that are spawned on-demand.
+
+  In short:
+
+      {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 2, 1)
+      w1  = PoolSup.checkout_nonblocking(pool_sup_pid) # => pre-spawned worker pid
+      w2  = PoolSup.checkout_nonblocking(pool_sup_pid) # => pre-spawned worker pid
+      w3  = PoolSup.checkout_nonblocking(pool_sup_pid) # => newly-spawned worker pid
+      nil = PoolSup.checkout_nonblocking(pool_sup_pid)
+      PoolSup.checkin(pool_sup_pid, w1)                # `w1` is terminated
+      PoolSup.checkin(pool_sup_pid, w2)                # `w2` is kept alive
+      PoolSup.checkin(pool_sup_pid, w3)                # `w3` is kept alive
+
+  ## Usage within supervision tree
+
+  The following code snippet spawns a supervisor that has `PoolSup` process as one of its children:
 
       chilldren = [
         ...
-        Supervisor.Spec.supervisor(PoolSup, [MyWorker, {:worker, :arg}, 5]),
+        Supervisor.Spec.supervisor(PoolSup, [MyWorker, {:worker, :arg}, 5, 3]),
         ...
       ]
       Supervisor.start_link(children, [strategy: :one_for_one])
+
+  The `PoolSup` process initially has 5 workers and can temporarily have upto 8.
+  All workers are started by `MyWorker.start_link({:worker, :arg})`.
 
   You can of course define a wrapper function of `PoolSup.start_link/4` and use it in your supervisor spec.
   """
@@ -107,10 +131,12 @@ defmodule PoolSup do
   Starts a `PoolSup` process linked to the calling process.
 
   ## Arguments
+
   - `worker_module` is the callback module of `PoolSup.Worker`.
   - `worker_init_arg` is the value passed to `worker_module.start_link/1` callback function.
-  - `capacity` is the initial number of workers this `PoolSup` process holds.
-  - Currently only `:name` option is supported for name registration.
+  - `reserved` is the number of workers this `PoolSup` process holds.
+  - `ondemand` is the maximum number of workers that are spawned on checkouts when all reserved processes are in use.
+  - Currently only `:name` option for name registration is supported.
   """
   defun start_link(worker_module   :: g[module],
                    worker_init_arg :: term,
@@ -125,7 +151,7 @@ defmodule PoolSup do
   end
 
   @doc """
-  Checks out a worker pid that is currently not used from a pool.
+  Checks out a worker pid that is currently not used.
 
   If no available worker process exists, the caller is blocked until either
   - any process becomes available, or
@@ -144,8 +170,8 @@ defmodule PoolSup do
   @doc """
   Checks out a worker pid in a nonblocking manner, i.e. if no available worker found this returns `nil`.
   """
-  defun checkout_nonblock(pool :: pool, timeout :: timeout \\ 5000) :: nil | pid do
-    GenServer.call(pool, :checkout_nonblock, timeout)
+  defun checkout_nonblocking(pool :: pool, timeout :: timeout \\ 5000) :: nil | pid do
+    GenServer.call(pool, :checkout_nonblocking, timeout)
   end
 
   @doc """
@@ -156,7 +182,7 @@ defmodule PoolSup do
   end
 
   @doc """
-  Temporarily checks out a worker pid, executes the given function using the pid, and checks in the pid.
+  Checks out a worker pid, executes the given function using the pid, and then checks in the pid.
 
   The `timeout` parameter is used only in the checkout step; time elapsed during other steps are not counted.
   """
@@ -179,13 +205,19 @@ defmodule PoolSup do
   @doc """
   Changes capacity (number of worker processes) of a pool.
 
-  If `new_capacity` is more than the current capacity, new processes are immediately spawned and become available.
-  Note that, as is the same throughout the OTP framework, spawning processes under supervisor is synchronous operation.
-  Therefore increasing large number of capacity at once may make a pool unresponsive for a while.
+  `new_reserved` and/or `new_ondemand` parameters can be `nil`; in that case the original value is kept unchanged
+  (i.e. `PoolSup.change_capacity(pool, 10, nil)` replaces only `reserved` value of `pool`).
 
-  If `new_capacity` is less than the current capacity, the pool tries to shutdown workers that are not in use.
-  Processes currently in use are never interrupted.
-  If number of in-use workers is more than `new_capacity`, reducing further is delayed until any worker process is checked in.
+  On receipt of `change_capacity` message, the pool adjusts number of children according to the new configuration as follows:
+
+  - If current number of workers are less than `reserved`, spawn new workers to ensure `reserved` workers are available.
+    Note that, as is the same throughout the OTP framework, spawning processes under a supervisor is synchronous operation.
+    Therefore increasing `reserved` too many at once may make the pool unresponsive for a while.
+  - When increasing total capacity (`reserved + ondemand`) and if any client process is being checking-out in a blocking manner,
+    then the newly-spawned process is returned to the client.
+  - When decreasing capacity, the pool tries to shutdown extra workers that are not in use.
+    Processes currently in use are never interrupted.
+    If number of in-use workers is more than the desired capacity, terminating further is delayed until any worker process is checked in.
   """
   defun change_capacity(pool :: pool, new_reserved :: nil | non_neg_integer, new_ondemand :: nil | non_neg_integer) :: :ok do
     (_pool, nil, nil) -> :ok
@@ -209,7 +241,7 @@ defmodule PoolSup do
     {sup_name, Callback, [spec]}
   end
 
-  def handle_call(:checkout_nonblock, _from,
+  def handle_call(:checkout_nonblocking, _from,
                   state(reserved: reserved, ondemand: ondemand, all: all, available: available) = s) do
     case available do
       [pid | pids] -> reply_with_available_worker(pid, pids, s)

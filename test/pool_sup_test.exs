@@ -47,11 +47,11 @@ defmodule PoolSupTest do
     assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
 
     # nonblocking checkout
-    worker1 = PoolSup.checkout_nonblock(pid)
-    worker2 = PoolSup.checkout_nonblock(pid)
-    worker3 = PoolSup.checkout_nonblock(pid)
+    worker1 = PoolSup.checkout_nonblocking(pid)
+    worker2 = PoolSup.checkout_nonblocking(pid)
+    worker3 = PoolSup.checkout_nonblocking(pid)
     assert MapSet.new([worker1, worker2, worker3]) == MapSet.new(children)
-    assert PoolSup.checkout_nonblock(pid) == nil
+    assert PoolSup.checkout_nonblocking(pid) == nil
     PoolSup.checkin(pid, worker1)
 
     # blocking checkout
@@ -105,13 +105,13 @@ defmodule PoolSupTest do
   test "should spawn ondemand processes when no available worker exists" do
     {:ok, pid} = PoolSup.start_link(W, [], 1, 1)
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
-    w1 = PoolSup.checkout_nonblock(pid)
+    w1 = PoolSup.checkout_nonblocking(pid)
     assert is_pid(w1)
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
-    w2 = PoolSup.checkout_nonblock(pid)
+    w2 = PoolSup.checkout_nonblocking(pid)
     assert is_pid(w2)
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 2, working: 2, available: 0}
-    assert PoolSup.checkout_nonblock(pid) == nil
+    assert PoolSup.checkout_nonblocking(pid) == nil
     PoolSup.checkin(pid, w1)
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
     PoolSup.checkin(pid, w2)
@@ -184,13 +184,13 @@ defmodule PoolSupTest do
 
   defp pick_cmd do
     Enum.random([
-      cmd_checkout_nonblock:   [],
-      cmd_checkout_or_catch:   [],
-      cmd_checkout_wait:       [],
-      cmd_checkin:             [],
-      cmd_change_capacity:     [pick_capacity, pick_capacity],
-      cmd_kill_running_worker: [],
-      cmd_kill_idle_worker:    [],
+      cmd_checkout_nonblocking: [],
+      cmd_checkout_or_catch:    [],
+      cmd_checkout_wait:        [],
+      cmd_checkin:              [],
+      cmd_change_capacity:      [pick_capacity, pick_capacity],
+      cmd_kill_running_worker:  [],
+      cmd_kill_idle_worker:     [],
     ])
   end
 
@@ -250,9 +250,9 @@ defmodule PoolSupTest do
     map_size(all) >= reserved + ondemand or :queue.is_empty(waiting)
   end
 
-  def cmd_checkout_nonblock(context) do
+  def cmd_checkout_nonblocking(context) do
     checked_out = context[:checked_out]
-    pid = PoolSup.checkout_nonblock(context[:pid])
+    pid = PoolSup.checkout_nonblocking(context[:pid])
     if length(checked_out) >= context[:reserved] + context[:ondemand] do
       assert pid == nil
       context
