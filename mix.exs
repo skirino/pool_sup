@@ -37,8 +37,6 @@ defmodule PoolSup.Mixfile do
       {:earmark, "~> 0.1" , only: :dev},
       {:ex_doc , "~> 0.11", only: :dev},
       {:coverex, "~> 1.4" , only: :test},
-      {:excheck, "~> 0.3" , only: :test},
-      {:triq   , github: "krestenkrab/triq", only: :test},
     ]
   end
 

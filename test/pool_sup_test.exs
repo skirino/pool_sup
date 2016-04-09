@@ -1,6 +1,5 @@
 defmodule PoolSupTest do
   use ExUnit.Case
-  use ExCheck
 
   defmodule W do
     @behaviour PoolSup.Worker
@@ -141,131 +140,63 @@ defmodule PoolSupTest do
     assert :sys.get_state(pid) == state
   end
 
-  #
-  # property-based tests
-  #
-  @max_capacity 10
-
-  def initial_state do
-    %{capacity: nil, pid: nil, checked_out: []}
+  test "invariance should hold on every step" do
+    Enum.each(1..10, fn _ ->
+      initial_capacity = pick_capacity
+      {:ok, pid} = PoolSup.start_link(W, [], initial_capacity)
+      initial_context = %{capacity: initial_capacity, pid: pid, checked_out: [], waiting: :queue.new, cmds: [start: [initial_capacity]]}
+      assert_invariance_hold(pid, initial_context, nil)
+      Enum.reduce(1..100, initial_context, fn(_, context) ->
+        state_before = :sys.get_state(pid)
+        new_context = run_cmd(context)
+        assert_invariance_hold(pid, new_context, state_before)
+        new_context
+      end)
+      :ok = Supervisor.stop(pid)
+      IO.write(IO.ANSI.green <> "." <> IO.ANSI.reset)
+    end)
   end
 
-  def command(state) do
-    case state[:pid] do
-      nil ->
-        {:call, __MODULE__, :start_pool_sup, [int(0, @max_capacity)]}
-      pid ->
-        [
-          [
-            {:call, PoolSup   , :checkout_nonblock, [pid]},
-            {:call, __MODULE__, :checkout_and_catch, [pid]},
-            {:call, PoolSup   , :change_capacity, [pid, int(0, @max_capacity)]},
-          ],
-          case state[:checked_out] do
-            []       -> []
-            children -> [
-              {:call, PoolSup   , :checkin, [pid, :triq_dom.elements(children)]},
-              {:call, __MODULE__, :kill_running_worker, [pid, :triq_dom.elements(children)]},
-              {:call, __MODULE__, :checkin_and_kill_idle_worker, [pid, :triq_dom.elements(children)]},
-            ]
-          end,
-        ]
-        |> List.flatten
-        |> :triq_dom.oneof
-    end
+  @max_capacity 5
+
+  defp pick_capacity do
+    :rand.uniform(@max_capacity + 1) - 1
   end
 
-  def start_pool_sup(capacity) do
-    {:ok, pid} = PoolSup.start_link(W, [], capacity, [name: __MODULE__])
-    pid
-  end
-
-  def checkout_and_catch(pid) do
-    try do
-      PoolSup.checkout(pid, 10)
-    catch
-      :exit, {:timeout, _} -> :timeout
-    end
-  end
-
-  def kill_running_worker(_pid, child) do
-    kill_child(child)
-  end
-
-  def checkin_and_kill_idle_worker(pid, child) do
-    PoolSup.checkin(pid, child)
-    kill_child(child)
-  end
-
-  defp kill_child(child) do
-    f = Enum.random([
-      fn -> Process.exit(child, :shutdown) end,
-      fn -> Process.exit(child, :kill    ) end,
-      fn -> GenServer.stop(child, :normal  ) end,
-      fn -> GenServer.stop(child, :shutdown) end,
-      fn -> GenServer.stop(child, :kill    ) end,
+  defp pick_cmd do
+    Enum.random([
+      cmd_checkout_nonblock:   [],
+      cmd_checkout_or_catch:   [],
+      cmd_checkout_wait:       [],
+      cmd_checkin:             [],
+      cmd_change_capacity:     [pick_capacity],
+      cmd_kill_running_worker: [],
+      cmd_kill_idle_worker:    [],
     ])
+  end
+
+  defp run_cmd(context) do
+    {fname, args} = cmd = pick_cmd
+    context2 = apply(__MODULE__, fname, [context | args])
+    %{context2 | cmds: [cmd | context[:cmds]]}
+  end
+
+  defp assert_invariance_hold(pid, context, state_before) do
+    {:state, all, working, available, to_decrease, waiting, sup_state} = state_after = :sys.get_state(pid)
     try do
-      f.()
-    catch
-      :exit, _ -> :ok # child is doubly killed (when decreasing capacity in PoolSup and here)
-    end
-    :timer.sleep(1) # necessary for the pool process to handle EXIT message prior to the next test step
-  end
-
-  def precondition(state, {:call, _, :start_pool_sup, _}) do
-    state[:pid] == nil
-  end
-  def precondition(state, _cmd) do
-    state[:pid] != nil
-  end
-
-  def postcondition(_state, {:call, __MODULE__, :start_pool_sup, [capacity]}, _ret) do
-    invariance_hold?(capacity)
-  end
-  def postcondition(_state, {:call, PoolSup, :change_capacity, [_, capacity]}, _ret) do
-    invariance_hold?(capacity)
-  end
-  def postcondition(state, _cmd, _ret) do
-    invariance_hold?(state[:capacity])
-  end
-
-  def next_state(state, v, {:call, __MODULE__, :start_pool_sup, [capacity]}) do
-    %{state | capacity: capacity, pid: v}
-  end
-  def next_state(state, _v, {:call, PoolSup, :change_capacity, [_, capacity]}) do
-    %{state | capacity: capacity}
-  end
-  def next_state(state, v, {:call, mod, fun, _}) when (mod == PoolSup and fun == :checkout_nonblock) or (mod == __MODULE__ and fun == :checkout_and_catch) do
-    if length(state[:checked_out]) < state[:capacity] do
-      %{state | checked_out: [v | state[:checked_out]]}
-    else
-      state
-    end
-  end
-  def next_state(state, _v, {:call, PoolSup, :checkin, [_, target]}) do
-    %{state | checked_out: List.delete(state[:checked_out], target)}
-  end
-  def next_state(state, _v, {:call, __MODULE__, fun, [_, target]}) when fun in [:kill_running_worker, :checkin_and_kill_idle_worker] do
-    %{state | checked_out: List.delete(state[:checked_out], target)}
-  end
-  def next_state(state, _v, _cmd) do
-    state
-  end
-
-  defp invariance_hold?(capacity) do
-    case Process.whereis(__MODULE__) do
-      nil -> true
-      pid ->
-        {:state, all, working, available, to_decrease, waiting, sup_state} = :sys.get_state(pid)
-        Enum.all?([
-          map_size(all) - to_decrease == capacity,
-          data_type_correct?(all, working, available, to_decrease),
-          all_corresponds_to_child_pids?(all, sup_state),
-          union_of_working_and_available_equals_to_all?(all, working, available),
-          is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease),
-          is_waiting_queue_empty_when_any_child_available?(available, waiting),
-        ])
+      assert map_size(all) - to_decrease == context[:capacity]
+      assert data_type_correct?(all, working, available, to_decrease)
+      assert all_corresponds_to_child_pids?(all, sup_state)
+      assert union_of_working_and_available_equals_to_all?(all, working, available)
+      assert is_capacity_to_decrease_equal_to_0_when_any_child_available?(available, to_decrease)
+      assert is_waiting_queue_empty_when_any_child_available?(available, waiting)
+    rescue
+      e ->
+        commands_so_far = Enum.reverse(context[:cmds])
+        IO.puts "commands executed so far = #{inspect(commands_so_far, pretty: true)}"
+        IO.inspect(state_before, pretty: true)
+        IO.inspect(state_after, pretty: true)
+        raise e
     end
   end
 
@@ -293,11 +224,109 @@ defmodule PoolSupTest do
     Enum.empty?(available) or :queue.is_empty(waiting)
   end
 
-  property :internal_state_invariance do
-    for_all cmds in :triq_statem.commands(__MODULE__) do
-      {_, _, :ok} = :triq_statem.run_commands(__MODULE__, cmds)
-      Supervisor.stop(__MODULE__)
-      true
+  def cmd_checkout_nonblock(context) do
+    checked_out = context[:checked_out]
+    pid = PoolSup.checkout_nonblock(context[:pid])
+    if length(checked_out) >= context[:capacity] do
+      assert pid == nil
+      context
+    else
+      assert is_pid(pid)
+      %{context | checked_out: [pid | checked_out]}
     end
+  end
+
+  def cmd_checkout_or_catch(context) do
+    checked_out = context[:checked_out]
+    if length(checked_out) >= context[:capacity] do
+      catch_exit PoolSup.checkout(context[:pid], 10)
+      context
+    else
+      pid = PoolSup.checkout(context[:pid])
+      assert is_pid(pid)
+      %{context | checked_out: [pid | checked_out]}
+    end
+  end
+
+  def cmd_checkout_wait(context) do
+    checked_out = context[:checked_out]
+    if length(checked_out) >= context[:capacity] do
+      self_pid = self
+      checkout_pid = spawn(fn ->
+        worker_pid = PoolSup.checkout(context[:pid], :infinity)
+        send(self_pid, {self, worker_pid})
+      end)
+      assert Process.alive?(checkout_pid)
+      %{context | waiting: :queue.in(checkout_pid, context[:waiting])}
+    else
+      pid = PoolSup.checkout(context[:pid], 1000)
+      assert is_pid(pid)
+      %{context | checked_out: [pid | checked_out]}
+    end
+  end
+
+  def cmd_checkin(context) do
+    checked_out = context[:checked_out]
+    if Enum.empty?(checked_out) do
+      context
+    else
+      worker = Enum.random(checked_out)
+      PoolSup.checkin(context[:pid], worker)
+      %{context | checked_out: List.delete(checked_out, worker)} |> receive_msg_from_waiting_processes
+    end
+  end
+
+  defp receive_msg_from_waiting_processes(context) do
+    receive do
+      {waiting_pid, checked_out_pid} ->
+        new_checked_out = [checked_out_pid | context[:checked_out]]
+        new_waiting = :queue.filter(fn w -> w != waiting_pid end, context[:waiting])
+        new_context = %{context | checked_out: new_checked_out, waiting: new_waiting}
+        receive_msg_from_waiting_processes(new_context)
+    after
+      10 -> context
+    end
+  end
+
+  def cmd_change_capacity(context, new_capacity) do
+    PoolSup.change_capacity(context[:pid], new_capacity)
+    %{context | capacity: new_capacity} |> receive_msg_from_waiting_processes
+  end
+
+  def cmd_kill_running_worker(context) do
+    checked_out = context[:checked_out]
+    if Enum.empty?(checked_out) do
+      context
+    else
+      worker = Enum.random(checked_out)
+      kill_child(worker)
+      %{context | checked_out: List.delete(checked_out, worker)} |> receive_msg_from_waiting_processes
+    end
+  end
+
+  def cmd_kill_idle_worker(context) do
+    {:state, all, working, _, _, _, _} = :sys.get_state(context[:pid])
+    idle_workers = Map.keys(all) -- Map.keys(working)
+    if !Enum.empty?(idle_workers) do
+      worker = Enum.random(idle_workers)
+      kill_child(worker)
+    end
+    context
+  end
+
+  defp kill_child(child) do
+    f = Enum.random([
+      fn -> Process.exit(child, :shutdown) end,
+      fn -> Process.exit(child, :kill    ) end,
+      fn -> GenServer.stop(child, :normal  ) end,
+      fn -> GenServer.stop(child, :shutdown) end,
+      fn -> GenServer.stop(child, :kill    ) end,
+    ])
+    try do
+      f.()
+    catch
+      :exit, _ -> :ok # child is doubly killed (when decreasing capacity in PoolSup and here)
+    end
+    :timer.sleep(1) # necessary for the pool process to handle EXIT message prior to the next test step
   end
 end
