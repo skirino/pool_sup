@@ -35,7 +35,7 @@ defmodule PoolSupTest do
 
   test "should checkout/checkin children" do
     {:ok, pid} = PoolSup.start_link(W, [], 3)
-    {:state, _, _, _, children, _, _} = :sys.get_state(pid)
+    {:state, _, _, _, _, children, _, _} = :sys.get_state(pid)
     [child1, _child2, _child3] = children
     assert Enum.all?(children, &Process.alive?/1)
 
@@ -142,9 +142,9 @@ defmodule PoolSupTest do
 
   test "invariance should hold on every step of randomly generated sequence of operations" do
     Enum.each(1..10, fn _ ->
-      initial_capacity = pick_capacity
-      {:ok, pid} = PoolSup.start_link(W, [], initial_capacity)
-      initial_context = %{capacity: initial_capacity, pid: pid, checked_out: [], waiting: :queue.new, cmds: [start: [initial_capacity]]}
+      initial_reserved = pick_reserved
+      {:ok, pid} = PoolSup.start_link(W, [], initial_reserved)
+      initial_context = %{reserved: initial_reserved, pid: pid, checked_out: [], waiting: :queue.new, cmds: [start: [initial_reserved]]}
       assert_invariance_hold(pid, initial_context, nil)
       Enum.reduce(1..100, initial_context, fn(_, context) ->
         state_before = :sys.get_state(pid)
@@ -157,10 +157,10 @@ defmodule PoolSupTest do
     end)
   end
 
-  @max_capacity 5
+  @max_reserved 5
 
-  defp pick_capacity do
-    :rand.uniform(@max_capacity + 1) - 1
+  defp pick_reserved do
+    :rand.uniform(@max_reserved + 1) - 1
   end
 
   defp pick_cmd do
@@ -169,7 +169,7 @@ defmodule PoolSupTest do
       cmd_checkout_or_catch:   [],
       cmd_checkout_wait:       [],
       cmd_checkin:             [],
-      cmd_change_capacity:     [pick_capacity],
+      cmd_change_capacity:     [pick_reserved],
       cmd_kill_running_worker: [],
       cmd_kill_idle_worker:    [],
     ])
@@ -182,9 +182,9 @@ defmodule PoolSupTest do
   end
 
   defp assert_invariance_hold(pid, context, state_before) do
-    {:state, reserved, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
+    {:state, reserved, _ondemand, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
     try do
-      assert reserved == context[:capacity]
+      assert reserved == context[:reserved]
       assert map_size(all) >= reserved
       assert data_type_correct?(all, working, available, waiting)
       assert all_corresponds_to_child_pids?(all, sup_state)
@@ -229,7 +229,7 @@ defmodule PoolSupTest do
   def cmd_checkout_nonblock(context) do
     checked_out = context[:checked_out]
     pid = PoolSup.checkout_nonblock(context[:pid])
-    if length(checked_out) >= context[:capacity] do
+    if length(checked_out) >= context[:reserved] do
       assert pid == nil
       context
     else
@@ -240,7 +240,7 @@ defmodule PoolSupTest do
 
   def cmd_checkout_or_catch(context) do
     checked_out = context[:checked_out]
-    if length(checked_out) >= context[:capacity] do
+    if length(checked_out) >= context[:reserved] do
       catch_exit PoolSup.checkout(context[:pid], 10)
       context
     else
@@ -252,7 +252,7 @@ defmodule PoolSupTest do
 
   def cmd_checkout_wait(context) do
     checked_out = context[:checked_out]
-    if length(checked_out) >= context[:capacity] do
+    if length(checked_out) >= context[:reserved] do
       self_pid = self
       checkout_pid = spawn(fn ->
         worker_pid = PoolSup.checkout(context[:pid], :infinity)
@@ -290,9 +290,9 @@ defmodule PoolSupTest do
     end
   end
 
-  def cmd_change_capacity(context, new_capacity) do
-    PoolSup.change_capacity(context[:pid], new_capacity)
-    %{context | capacity: new_capacity} |> receive_msg_from_waiting_processes
+  def cmd_change_capacity(context, new_reserved) do
+    PoolSup.change_capacity(context[:pid], new_reserved)
+    %{context | reserved: new_reserved} |> receive_msg_from_waiting_processes
   end
 
   def cmd_kill_running_worker(context) do
@@ -307,7 +307,7 @@ defmodule PoolSupTest do
   end
 
   def cmd_kill_idle_worker(context) do
-    {:state, _, all, working, _, _, _} = :sys.get_state(context[:pid])
+    {:state, _, _, all, working, _, _, _} = :sys.get_state(context[:pid])
     idle_workers = Map.keys(all) -- Map.keys(working)
     if !Enum.empty?(idle_workers) do
       worker = Enum.random(idle_workers)

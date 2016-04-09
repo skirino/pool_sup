@@ -82,6 +82,7 @@ defmodule PoolSup do
   require Record
   Record.defrecordp :state, [
     :reserved,
+    :ondemand,
     :all,
     :working,
     :available,
@@ -90,6 +91,7 @@ defmodule PoolSup do
   ]
   @typep state :: record(:state,
     reserved:  non_neg_integer,
+    ondemand:  non_neg_integer,
     all:       PidSet.t,
     working:   PidSet.t,
     available: [pid],
