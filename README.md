@@ -15,7 +15,7 @@
 - `PoolSup` process manages which worker processes are in use and which are not.
 - `PoolSup` automatically restart crashed workers.
 - Functions to request pid of an available worker process: `checkout/2`, `checkout_nonblocking/2`.
-- Run-time configuration of pool size: `change_capacity/2`.
+- Run-time configuration of pool size: `change_capacity/3`.
 
 ## Example
 
@@ -59,8 +59,8 @@ In short:
     w3  = PoolSup.checkout_nonblocking(pool_sup_pid) # => newly-spawned worker pid
     nil = PoolSup.checkout_nonblocking(pool_sup_pid)
     PoolSup.checkin(pool_sup_pid, w1)                # `w1` is terminated
-    PoolSup.checkin(pool_sup_pid, w2)                # `w2` is kept alive
-    PoolSup.checkin(pool_sup_pid, w3)                # `w3` is kept alive
+    PoolSup.checkin(pool_sup_pid, w2)                # `w2` is kept alive for the subsequent checkout
+    PoolSup.checkin(pool_sup_pid, w3)                # `w3` is kept alive for the subsequent checkout
 
 ## Usage within supervision tree
 

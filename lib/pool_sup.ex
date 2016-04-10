@@ -11,7 +11,7 @@ defmodule PoolSup do
   - `PoolSup` process manages which worker processes are in use and which are not.
   - `PoolSup` automatically restart crashed workers.
   - Functions to request pid of an available worker process: `checkout/2`, `checkout_nonblocking/2`.
-  - Run-time configuration of pool size: `change_capacity/2`.
+  - Run-time configuration of pool size: `change_capacity/3`.
 
   ## Example
 
@@ -55,8 +55,8 @@ defmodule PoolSup do
       w3  = PoolSup.checkout_nonblocking(pool_sup_pid) # => newly-spawned worker pid
       nil = PoolSup.checkout_nonblocking(pool_sup_pid)
       PoolSup.checkin(pool_sup_pid, w1)                # `w1` is terminated
-      PoolSup.checkin(pool_sup_pid, w2)                # `w2` is kept alive
-      PoolSup.checkin(pool_sup_pid, w3)                # `w3` is kept alive
+      PoolSup.checkin(pool_sup_pid, w2)                # `w2` is kept alive for the subsequent checkout
+      PoolSup.checkin(pool_sup_pid, w3)                # `w3` is kept alive for the subsequent checkout
 
   ## Usage within supervision tree
 
@@ -212,7 +212,7 @@ defmodule PoolSup do
   - If current number of workers are less than `reserved`, spawn new workers to ensure `reserved` workers are available.
     Note that, as is the same throughout the OTP framework, spawning processes under a supervisor is synchronous operation.
     Therefore increasing `reserved` too many at once may make the pool unresponsive for a while.
-  - When increasing total capacity (`reserved + ondemand`) and if any client process is being checking-out in a blocking manner,
+  - When increasing maximum capacity (`reserved + ondemand`) and if any client process is being checking-out in a blocking manner,
     then the newly-spawned process is returned to the client.
   - When decreasing capacity, the pool tries to shutdown extra workers that are not in use.
     Processes currently in use are never interrupted.
