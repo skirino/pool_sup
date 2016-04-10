@@ -305,7 +305,7 @@ defmodule PoolSup do
     end
   end
   def handle_cast({:cancel_waiting, pid}, state(waiting: waiting) = s) do
-    new_waiting = :queue.filter(&(&1 == pid), waiting)
+    new_waiting = :queue.filter(&(!match?({^pid, _}, &1)), waiting)
     {:noreply, state(s, waiting: new_waiting)}
   end
   def handle_cast({:change_capacity, new_reserved, new_ondemand}, s) do

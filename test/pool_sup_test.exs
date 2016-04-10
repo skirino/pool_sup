@@ -74,6 +74,13 @@ defmodule PoolSupTest do
     assert Process.alive?(checkout_pid1)
     assert Process.alive?(checkout_pid2)
 
+    # `waiting` queue should be restored when blocking checkout failed
+    :timer.sleep(1)
+    state1 = :sys.get_state(pid)
+    catch_exit PoolSup.checkout(pid, 10)
+    assert :sys.get_state(pid) == state1
+
+    # waiting clients should receive pids when available
     PoolSup.checkin(pid, worker2)
     assert_receive(worker2, 10)
     refute Process.alive?(checkout_pid1)
@@ -247,9 +254,11 @@ defmodule PoolSupTest do
       assert data_type_correct?(all, working, available, waiting)
       assert all_corresponds_to_child_pids?(all, sup_state)
       assert union_of_working_and_available_equals_to_all?(all, working, available)
+      assert is_working_equal_to_checked_out_in_context?(working, context[:checked_out])
       assert is_all_processes_count_equal_to_reserved_when_any_child_available?(reserved, all, available)
       assert is_waiting_queue_empty_when_any_child_available?(available, waiting)
       assert is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting)
+      assert is_waiting_queue_equal_to_client_queue_in_context?(waiting, context[:waiting])
     rescue
       e ->
         commands_so_far = Enum.reverse(context[:cmds])
@@ -277,6 +286,10 @@ defmodule PoolSupTest do
     Enum.into(available, working, fn pid -> {pid, true} end) == all
   end
 
+  defp is_working_equal_to_checked_out_in_context?(working, checked_out) do
+    assert working == Enum.into(checked_out, %{}, fn pid -> {pid, true} end)
+  end
+
   defp is_all_processes_count_equal_to_reserved_when_any_child_available?(reserved, all, available) do
     map_size(all) == reserved or Enum.empty?(available)
   end
@@ -287,6 +300,11 @@ defmodule PoolSupTest do
 
   defp is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting) do
     map_size(all) >= reserved + ondemand or :queue.is_empty(waiting)
+  end
+
+  defp is_waiting_queue_equal_to_client_queue_in_context?(waiting, waiting_in_context) do
+    waiting_pids = :queue.to_list(waiting) |> Enum.map(fn {pid, _} -> pid end)
+    assert waiting_pids == :queue.to_list(waiting_in_context)
   end
 
   def cmd_checkout_nonblocking(context) do
@@ -322,6 +340,7 @@ defmodule PoolSupTest do
         send(self_pid, {self, worker_pid})
       end)
       assert Process.alive?(checkout_pid)
+      :timer.sleep(1) # Gives the newly-spawned process a timeslice
       %{context | waiting: :queue.in(checkout_pid, context[:waiting])}
     else
       pid = PoolSup.checkout(context[:pid], 1000)
