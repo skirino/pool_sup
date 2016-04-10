@@ -99,7 +99,7 @@ defmodule PoolSup do
 
   @type  pool         :: pid | GS.name
   @type  options      :: [name: GS.name]
-  @typep client       :: {pid, reference}
+  @typep client       :: {{pid, reference}, reference}
   @typep client_queue :: :queue.queue(client)
   @typep sup_state    :: term
 
@@ -252,7 +252,7 @@ defmodule PoolSup do
         end
     end
   end
-  def handle_call(:checkout, from,
+  def handle_call(:checkout, {client_pid, _ref} = from,
                   state(reserved: reserved, ondemand: ondemand, all: all, available: available, waiting: waiting) = s) do
     case available do
       [pid | pids] -> reply_with_available_worker(pid, pids, s)
@@ -260,7 +260,8 @@ defmodule PoolSup do
         if map_size(all) < reserved + ondemand do
           reply_with_ondemand_worker(s)
         else
-          {:noreply, state(s, waiting: :queue.in(from, waiting))}
+          mref = Process.monitor(client_pid)
+          {:noreply, state(s, waiting: :queue.in({from, mref}, waiting))}
         end
     end
   end
@@ -304,9 +305,8 @@ defmodule PoolSup do
       {:noreply, s}
     end
   end
-  def handle_cast({:cancel_waiting, pid}, state(waiting: waiting) = s) do
-    new_waiting = :queue.filter(&(!match?({^pid, _}, &1)), waiting)
-    {:noreply, state(s, waiting: new_waiting)}
+  def handle_cast({:cancel_waiting, pid}, s) do
+    {:noreply, remove_and_demonitor_pid_from_waiting_queue(s, pid)}
   end
   def handle_cast({:change_capacity, new_reserved, new_ondemand}, s) do
     s2 = case {new_reserved, new_ondemand} do
@@ -346,7 +346,7 @@ defmodule PoolSup do
   end
 
   defunp send_reply_with_checked_in_child(s :: state, pid :: pid, client :: client, waiting :: client_queue) :: state do
-    GenServer.reply(client, pid)
+    send_reply_to_waiting_client(client, pid)
     state(s, waiting: waiting)
   end
 
@@ -398,8 +398,9 @@ defmodule PoolSup do
     {:noreply, new_sup_state} = :supervisor.handle_info(msg, sup_state)
     s2 = state(s, sup_state: new_sup_state)
     s3 = case msg do
-      {:EXIT, pid, _reason} -> handle_exit(s2, pid)
-      _                     -> s2
+      {:EXIT, pid, _reason}                  -> handle_exit(s2, pid)
+      {:DOWN, _mref, :process, pid, _reason} -> remove_pid_from_waiting_queue(s2, pid)
+      _                                      -> s2
     end
     {:noreply, s3}
   end
@@ -446,8 +447,13 @@ defmodule PoolSup do
   defunp send_reply_with_new_child(state(all: all, working: working, sup_state: sup_state) = s :: state,
                                    client :: client, waiting :: client_queue) :: state do
     {pid, new_sup_state} = start_child(sup_state)
-    GenServer.reply(client, pid)
+    send_reply_to_waiting_client(client, pid)
     state(s, all: PidSet.put(all, pid), working: PidSet.put(working, pid), waiting: waiting, sup_state: new_sup_state)
+  end
+
+  defunp send_reply_to_waiting_client({from, mref} :: client, pid :: pid) :: :ok do
+    Process.demonitor(mref)
+    GenServer.reply(from, pid)
   end
 
   defunp restock_child(state(all: all, available: available, sup_state: sup_state) = s :: state) :: state do
@@ -463,6 +469,19 @@ defmodule PoolSup do
   defunp terminate_child(pid :: pid, sup_state :: sup_state) :: sup_state do
     {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, self, sup_state)
     new_sup_state
+  end
+
+  defunp remove_pid_from_waiting_queue(state(waiting: waiting) = s :: state, pid :: pid) :: state do
+    new_waiting = :queue.filter(&(!match?({{^pid, _}, _}, &1)), waiting)
+    state(s, waiting: new_waiting)
+  end
+
+  defunp remove_and_demonitor_pid_from_waiting_queue(state(waiting: waiting) = s :: state, pid :: pid) :: state do
+    new_waiting = :queue.filter(fn
+      {{^pid, _}, mref} -> Process.demonitor(mref); false
+      _                 -> true
+    end, waiting)
+    state(s, waiting: new_waiting)
   end
 
   def terminate(reason, state(sup_state: sup_state)) do

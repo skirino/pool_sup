@@ -237,6 +237,7 @@ defmodule PoolSupTest do
       cmd_change_capacity:      [pick_capacity, pick_capacity],
       cmd_kill_running_worker:  [],
       cmd_kill_idle_worker:     [],
+      cmd_kill_waiting_client:  [],
     ])
   end
 
@@ -271,7 +272,7 @@ defmodule PoolSupTest do
 
   defp data_type_correct?(all, working, available, waiting) do
     all_pid? = [Map.keys(all), Map.keys(working), available] |> List.flatten |> Enum.all?(&is_pid/1)
-    all_pairs? = :queue.to_list(waiting) |> Enum.all?(fn {pid, ref} -> is_pid(pid) and is_reference(ref) end)
+    all_pairs? = :queue.to_list(waiting) |> Enum.all?(fn {{pid, ref}, mref} -> is_pid(pid) and is_reference(ref) and is_reference(mref) end)
     all_pid? and all_pairs?
   end
 
@@ -303,7 +304,7 @@ defmodule PoolSupTest do
   end
 
   defp is_waiting_queue_equal_to_client_queue_in_context?(waiting, waiting_in_context) do
-    waiting_pids = :queue.to_list(waiting) |> Enum.map(fn {pid, _} -> pid end)
+    waiting_pids = :queue.to_list(waiting) |> Enum.map(fn {{pid, _}, _} -> pid end)
     assert waiting_pids == :queue.to_list(waiting_in_context)
   end
 
@@ -385,6 +386,19 @@ defmodule PoolSupTest do
       kill_child(worker)
     end
     context
+  end
+
+  def cmd_kill_waiting_client(context) do
+    waiting = :queue.to_list(context[:waiting])
+    if Enum.empty?(waiting) do
+      context
+    else
+      client_pid = Enum.random(waiting)
+      Process.exit(client_pid, :kill)
+      :timer.sleep(1)
+      new_waiting = :queue.filter(&(&1 != client_pid), context[:waiting])
+      %{context | waiting: new_waiting}
+    end
   end
 
   defp kill_child(child) do
