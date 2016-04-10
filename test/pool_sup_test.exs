@@ -41,7 +41,7 @@ defmodule PoolSupTest do
 
   test "should checkout/checkin children" do
     {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    {:state, _, _, _, _, children, _, _} = :sys.get_state(pid)
+    {:state, _, _, _, _, _, children, _} = :sys.get_state(pid)
     [child1, _child2, _child3] = children
     assert Enum.all?(children, &Process.alive?/1)
 
@@ -183,7 +183,7 @@ defmodule PoolSupTest do
 
   test "should pretend as a supervisor when :sys.get_status/1 is called" do
     {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    {:state, _, _, _, _, _, _, sup_state} = :sys.get_state(pid)
+    {:state, sup_state, _, _, _, _, _, _} = :sys.get_state(pid)
     {:status, _pid, {:module, _mod}, [_pdict, _sysstate, _parent, _dbg, misc]} = :sys.get_status(pid)
     [_header, _data, {:data, [{'State', state_from_get_status}]}] = misc
     assert state_from_get_status == sup_state
@@ -248,7 +248,7 @@ defmodule PoolSupTest do
   end
 
   defp assert_invariance_hold(pid, context, state_before) do
-    {:state, reserved, ondemand, all, working, available, waiting, sup_state} = state_after = :sys.get_state(pid)
+    {:state, sup_state, reserved, ondemand, all, working, available, waiting} = state_after = :sys.get_state(pid)
     try do
       assert reserved == context[:reserved]
       assert map_size(all) >= reserved
@@ -379,7 +379,7 @@ defmodule PoolSupTest do
   end
 
   def cmd_kill_idle_worker(context) do
-    {:state, _, _, all, working, _, _, _} = :sys.get_state(context[:pid])
+    {:state, _, _, _, all, working, _, _} = :sys.get_state(context[:pid])
     idle_workers = Map.keys(all) -- Map.keys(working)
     if !Enum.empty?(idle_workers) do
       worker = Enum.random(idle_workers)

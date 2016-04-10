@@ -78,6 +78,7 @@ defmodule PoolSup do
   alias Supervisor, as: S
   alias GenServer, as: GS
   use GS
+  import PoolSup.CustomSupHelper
 
   defmodule Callback do
     @moduledoc false
@@ -105,22 +106,22 @@ defmodule PoolSup do
 
   require Record
   Record.defrecordp :state, [
+    :sup_state,
     :reserved,
     :ondemand,
     :all,
     :working,
     :available,
     :waiting,
-    :sup_state,
   ]
   @typep state :: record(:state,
+    sup_state: sup_state,
     reserved:  non_neg_integer,
     ondemand:  non_neg_integer,
     all:       PidSet.t,
     working:   PidSet.t,
     available: [pid],
     waiting:   client_queue,
-    sup_state: sup_state,
   )
 
   #
@@ -143,10 +144,6 @@ defmodule PoolSup do
                    ondemand        :: g[non_neg_integer],
                    options         :: options \\ []) :: GS.on_start do
     GS.start_link(__MODULE__, {worker_module, worker_init_arg, reserved, ondemand, options}, gen_server_opts(options))
-  end
-
-  defunp gen_server_opts(opts :: options) :: [name: GS.name] do
-    Enum.filter(opts, &match?({:name, _}, &1))
   end
 
   @doc """
@@ -220,7 +217,7 @@ defmodule PoolSup do
   """
   defun change_capacity(pool :: pool, new_reserved :: nil | non_neg_integer, new_ondemand :: nil | non_neg_integer) :: :ok do
     (_pool, nil, nil) -> :ok
-    (pool , r  , o  ) when (is_nil(r) or is_integer(r) and r >= 0) and (is_nil(o) or is_integer(o) and o >= 0) ->
+    (pool , r  , o  ) when is_nil_or_nni(r) and is_nil_or_nni(o) ->
       GenServer.cast(pool, {:change_capacity, r, o})
   end
 
@@ -229,7 +226,7 @@ defmodule PoolSup do
   #
   def init({mod, init_arg, reserved, ondemand, opts}) do
     {:ok, sup_state} = :supervisor.init(supervisor_init_arg(mod, init_arg, opts))
-    s = state(reserved: reserved, ondemand: ondemand, all: PidSet.new, working: PidSet.new, available: [], waiting: :queue.new, sup_state: sup_state)
+    s = state(sup_state: sup_state, reserved: reserved, ondemand: ondemand, all: PidSet.new, working: PidSet.new, available: [], waiting: :queue.new)
     {:ok, restock_children_upto_reserved(s)}
   end
 
@@ -292,9 +289,9 @@ defmodule PoolSup do
     {:reply, pid, state(s, working: PidSet.put(working, pid), available: pids)}
   end
 
-  defunp reply_with_ondemand_worker(state(all: all, working: working, sup_state: sup_state) = s :: state) :: {:reply, pid, state} do
+  defunp reply_with_ondemand_worker(state(sup_state: sup_state, all: all, working: working) = s :: state) :: {:reply, pid, state} do
     {new_child_pid, new_sup_state} = start_child(sup_state)
-    s2 = state(s, all: PidSet.put(all, new_child_pid), working: PidSet.put(working, new_child_pid), sup_state: new_sup_state)
+    s2 = state(s, sup_state: new_sup_state, all: PidSet.put(all, new_child_pid), working: PidSet.put(working, new_child_pid))
     {:reply, new_child_pid, s2}
   end
 
@@ -341,8 +338,8 @@ defmodule PoolSup do
     end
   end
 
-  defunp terminate_checked_in_child(state(all: all, working: working, sup_state: sup_state) = s :: state, pid :: pid) :: state do
-    state(s, all: PidSet.delete(all, pid), working: PidSet.delete(working, pid), sup_state: terminate_child(pid, sup_state))
+  defunp terminate_checked_in_child(state(sup_state: sup_state, all: all, working: working) = s :: state, pid :: pid) :: state do
+    state(s, sup_state: terminate_child(pid, sup_state), all: PidSet.delete(all, pid), working: PidSet.delete(working, pid))
   end
 
   defunp send_reply_with_checked_in_child(s :: state, pid :: pid, client :: client, waiting :: client_queue) :: state do
@@ -374,12 +371,12 @@ defmodule PoolSup do
     end
   end
 
-  defunp terminate_extra_children(state(reserved: reserved, all: all, available: available, sup_state: sup_state) = s :: state) :: state do
+  defunp terminate_extra_children(state(sup_state: sup_state, reserved: reserved, all: all, available: available) = s :: state) :: state do
     case available do
       []           -> s
       [pid | pids] ->
         if map_size(all) > reserved do
-          state(s, all: PidSet.delete(all, pid), available: pids, sup_state: terminate_child(pid, sup_state)) |> terminate_extra_children
+          state(s, sup_state: terminate_child(pid, sup_state), all: PidSet.delete(all, pid), available: pids) |> terminate_extra_children
         else
           s
         end
@@ -444,11 +441,11 @@ defmodule PoolSup do
     end
   end
 
-  defunp send_reply_with_new_child(state(all: all, working: working, sup_state: sup_state) = s :: state,
+  defunp send_reply_with_new_child(state(sup_state: sup_state, all: all, working: working) = s :: state,
                                    client :: client, waiting :: client_queue) :: state do
     {pid, new_sup_state} = start_child(sup_state)
     send_reply_to_waiting_client(client, pid)
-    state(s, all: PidSet.put(all, pid), working: PidSet.put(working, pid), waiting: waiting, sup_state: new_sup_state)
+    state(s, sup_state: new_sup_state, all: PidSet.put(all, pid), working: PidSet.put(working, pid), waiting: waiting)
   end
 
   defunp send_reply_to_waiting_client({from, mref} :: client, pid :: pid) :: :ok do
@@ -456,9 +453,9 @@ defmodule PoolSup do
     GenServer.reply(from, pid)
   end
 
-  defunp restock_child(state(all: all, available: available, sup_state: sup_state) = s :: state) :: state do
+  defunp restock_child(state(sup_state: sup_state, all: all, available: available) = s :: state) :: state do
     {pid, new_sup_state} = start_child(sup_state)
-    state(s, all: PidSet.put(all, pid), available: [pid | available], sup_state: new_sup_state)
+    state(s, sup_state: new_sup_state, all: PidSet.put(all, pid), available: [pid | available])
   end
 
   defunp start_child(sup_state :: sup_state) :: {pid, sup_state} do
@@ -495,8 +492,5 @@ defmodule PoolSup do
     end
   end
 
-  # We need to define `format_status` to pretend as if it's an ordinary supervisor when `sys:get_status/1` is called
-  @doc false
-  def format_status(:terminate, [_pdict, s                          ]), do: s
-  def format_status(:normal   , [_pdict, state(sup_state: sup_state)]), do: [{:data, [{'State', sup_state}]}]
+  defdelegate format_status(opt, list), to: PoolSup.CustomSupHelper
 end
