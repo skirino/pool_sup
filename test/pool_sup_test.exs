@@ -2,6 +2,12 @@ defmodule PoolSupTest do
   use ExUnit.Case
   import CustomSupTest
 
+  defp with_pool(reserved \\ 3, ondemand \\ 0, f) do
+    {:ok, pid} = PoolSup.start_link(W, [], reserved, ondemand)
+    f.(pid)
+    shutdown_pool(pid)
+  end
+
   defp shutdown_pool(pool) do
     childs = Supervisor.which_children(pool) |> Enum.map(fn {_, pid, _, _} -> pid end)
     Supervisor.stop(pool)
@@ -10,16 +16,21 @@ defmodule PoolSupTest do
     refute Enum.any?(childs, &Process.alive?/1)
   end
 
+  test "should register name specified by :name option" do
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0, [name: :registered_name])
+    assert Process.whereis(:registered_name) == pid
+  end
+
   test "should behave as an ordinary supervisor" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0, [name: __MODULE__])
-    assert_which_children(pid, 3)
-    shutdown_pool(pid)
+    with_pool(fn pid ->
+      assert_which_children(pid, 3)
+    end)
   end
 
   test "should return error for start_child, terminate_child, restart_child, delete_child" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    assert_returns_error_for_prohibited_functions(pid)
-    shutdown_pool(pid)
+    with_pool(fn pid ->
+      assert_returns_error_for_prohibited_functions(pid)
+    end)
   end
 
   test "should die when parent process dies" do
@@ -28,137 +39,133 @@ defmodule PoolSupTest do
   end
 
   test "should not be affected when other linked process dies" do
-    {:ok, pool_pid} = PoolSup.start_link(W, [], 3, 0)
-    assert_not_affected_when_non_child_linked_process_dies(pool_pid)
-    shutdown_pool(pool_pid)
+    with_pool(fn pid ->
+      assert_not_affected_when_non_child_linked_process_dies(pid)
+    end)
   end
 
   test "should not be affected by info messages" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    assert_not_affected_by_info_messages(pid)
-    shutdown_pool(pid)
+    with_pool(fn pid ->
+      assert_not_affected_by_info_messages(pid)
+    end)
   end
 
   test "code_change/3 should return an ok-tuple" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    assert_code_change_returns_an_ok_tuple(PoolSup, pid)
-    shutdown_pool(pid)
+    with_pool(fn pid ->
+      assert_code_change_returns_an_ok_tuple(PoolSup, pid)
+    end)
   end
 
   test "should pretend as a supervisor when :sys.get_status/1 is called" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    assert_pretends_as_a_supervisor_on_get_status(pid)
-    shutdown_pool(pid)
+    with_pool(fn pid ->
+      assert_pretends_as_a_supervisor_on_get_status(pid)
+    end)
   end
 
   test "should checkout/checkin children" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    {:state, _, _, _, _, _, children, _} = :sys.get_state(pid)
-    [child1, _child2, _child3] = children
-    assert Enum.all?(children, &Process.alive?/1)
+    with_pool(fn pid ->
+      {:state, _, _, _, _, _, children, _} = :sys.get_state(pid)
+      [child1, _child2, _child3] = children
+      assert Enum.all?(children, &Process.alive?/1)
 
-    # checkin not-working pid => no effect
-    assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
-    PoolSup.checkin(pid, self)
-    assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
-    PoolSup.checkin(pid, child1)
-    assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
+      # checkin not-working pid => no effect
+      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
+      PoolSup.checkin(pid, self)
+      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
+      PoolSup.checkin(pid, child1)
+      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
 
-    # nonblocking checkout
-    worker1 = PoolSup.checkout_nonblocking(pid)
-    worker2 = PoolSup.checkout_nonblocking(pid)
-    worker3 = PoolSup.checkout_nonblocking(pid)
-    assert MapSet.new([worker1, worker2, worker3]) == MapSet.new(children)
-    assert PoolSup.checkout_nonblocking(pid) == nil
-    PoolSup.checkin(pid, worker1)
+      # nonblocking checkout
+      worker1 = PoolSup.checkout_nonblocking(pid)
+      worker2 = PoolSup.checkout_nonblocking(pid)
+      worker3 = PoolSup.checkout_nonblocking(pid)
+      assert MapSet.new([worker1, worker2, worker3]) == MapSet.new(children)
+      assert PoolSup.checkout_nonblocking(pid) == nil
+      PoolSup.checkin(pid, worker1)
 
-    # blocking checkout
-    ^worker1 = PoolSup.checkout(pid)
-    catch_exit PoolSup.checkout(pid, 10)
+      # blocking checkout
+      ^worker1 = PoolSup.checkout(pid)
+      catch_exit PoolSup.checkout(pid, 10)
 
-    current_test_pid = self
-    f = fn ->
-      send(current_test_pid, PoolSup.checkout(pid))
-    end
-    checkout_pid1 = spawn(f)
-    :timer.sleep(1)
-    checkout_pid2 = spawn(f)
-    assert Process.alive?(checkout_pid1)
-    assert Process.alive?(checkout_pid2)
+      current_test_pid = self
+      f = fn ->
+        send(current_test_pid, PoolSup.checkout(pid))
+      end
+      checkout_pid1 = spawn(f)
+      :timer.sleep(1)
+      checkout_pid2 = spawn(f)
+      assert Process.alive?(checkout_pid1)
+      assert Process.alive?(checkout_pid2)
 
-    # `waiting` queue should be restored when blocking checkout failed
-    :timer.sleep(1)
-    state1 = :sys.get_state(pid)
-    catch_exit PoolSup.checkout(pid, 10)
-    assert :sys.get_state(pid) == state1
+      # `waiting` queue should be restored when blocking checkout failed
+      :timer.sleep(1)
+      state1 = :sys.get_state(pid)
+      catch_exit PoolSup.checkout(pid, 10)
+      assert :sys.get_state(pid) == state1
 
-    # waiting clients should receive pids when available
-    PoolSup.checkin(pid, worker2)
-    assert_receive(worker2, 10)
-    refute Process.alive?(checkout_pid1)
+      # waiting clients should receive pids when available
+      PoolSup.checkin(pid, worker2)
+      assert_receive(worker2, 10)
+      refute Process.alive?(checkout_pid1)
 
-    Process.exit(worker3, :shutdown)
-    receive do
-      newly_spawned_worker_pid -> refute newly_spawned_worker_pid in [worker1, worker2, worker3]
-    end
-    refute Process.alive?(checkout_pid2)
-
-    shutdown_pool(pid)
+      Process.exit(worker3, :shutdown)
+      receive do
+        newly_spawned_worker_pid -> refute newly_spawned_worker_pid in [worker1, worker2, worker3]
+      end
+      refute Process.alive?(checkout_pid2)
+    end)
   end
 
   test "transaction/3 should correctly checkin child pid" do
-    {:ok, pid} = PoolSup.start_link(W, [], 1, 0)
-    child_not_in_use? = fn ->
-      child = PoolSup.checkout(pid)
-      PoolSup.checkin(pid, child)
-    end
+    with_pool(1, 0, fn pid ->
+      ensure_child_not_in_use = fn ->
+        child = PoolSup.checkout(pid) # block if something is wrong
+        PoolSup.checkin(pid, child)
+      end
 
-    assert child_not_in_use?.()
-    assert PoolSup.transaction(pid, fn _ -> :ok end) == :ok
-    assert child_not_in_use?.()
-    catch_error PoolSup.transaction(pid, fn _ -> raise "foo" end)
-    assert child_not_in_use?.()
-    catch_throw PoolSup.transaction(pid, fn _ -> throw "bar" end)
-    assert child_not_in_use?.()
-    catch_exit PoolSup.transaction(pid, fn _ -> exit(:baz) end)
-    assert child_not_in_use?.()
-
-    shutdown_pool(pid)
+      ensure_child_not_in_use.()
+      assert PoolSup.transaction(pid, fn _ -> :ok end) == :ok
+      ensure_child_not_in_use.()
+      catch_error PoolSup.transaction(pid, fn _ -> raise "foo" end)
+      ensure_child_not_in_use.()
+      catch_throw PoolSup.transaction(pid, fn _ -> throw "bar" end)
+      ensure_child_not_in_use.()
+      catch_exit PoolSup.transaction(pid, fn _ -> exit(:baz) end)
+      ensure_child_not_in_use.()
+    end)
   end
 
   test "should spawn ondemand processes when no available worker exists" do
-    {:ok, pid} = PoolSup.start_link(W, [], 1, 1)
-
-    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
-    w1 = PoolSup.checkout_nonblocking(pid)
-    assert is_pid(w1)
-    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
-    w2 = PoolSup.checkout_nonblocking(pid)
-    assert is_pid(w2)
-    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 2, working: 2, available: 0}
-    assert PoolSup.checkout_nonblocking(pid) == nil
-    PoolSup.checkin(pid, w1)
-    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
-    PoolSup.checkin(pid, w2)
-    assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
-
-    shutdown_pool(pid)
+    with_pool(1, 1, fn pid ->
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
+      w1 = PoolSup.checkout_nonblocking(pid)
+      assert is_pid(w1)
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
+      w2 = PoolSup.checkout_nonblocking(pid)
+      assert is_pid(w2)
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 2, working: 2, available: 0}
+      assert PoolSup.checkout_nonblocking(pid) == nil
+      PoolSup.checkin(pid, w1)
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
+      PoolSup.checkin(pid, w2)
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
+    end)
   end
 
   test "invariance should hold on every step of randomly generated sequence of operations" do
     Enum.each(1..30, fn _ ->
       initial_reserved = pick_capacity_initial
       initial_ondemand = pick_capacity_initial
-      {:ok, pid} = PoolSup.start_link(W, [], initial_reserved, initial_ondemand)
-      initial_context = initial_context(pid, initial_reserved, initial_ondemand)
-      assert_invariance_hold(pid, initial_context, nil)
-      Enum.reduce(1..100, initial_context, fn(_, context) ->
-        state_before = :sys.get_state(pid)
-        new_context = run_cmd(context)
-        assert_invariance_hold(pid, new_context, state_before)
-        new_context
+      with_pool(initial_reserved, initial_ondemand, fn pid ->
+        initial_context = initial_context(pid, initial_reserved, initial_ondemand)
+        assert_invariance_hold(pid, initial_context, nil)
+        Enum.reduce(1..100, initial_context, fn(_, context) ->
+          state_before = :sys.get_state(pid)
+          new_context = run_cmd(context)
+          assert_invariance_hold(pid, new_context, state_before)
+          new_context
+        end)
       end)
-      shutdown_pool(pid)
       IO.write(IO.ANSI.green <> "." <> IO.ANSI.reset)
     end)
   end
