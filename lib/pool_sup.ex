@@ -432,11 +432,6 @@ defmodule PoolSup do
     state(s, sup_state: new_sup_state, all: PidSet.put(all, pid), available: [pid | available])
   end
 
-  defunp terminate_child(pid :: pid, sup_state :: sup_state) :: sup_state do
-    {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, nil, sup_state)
-    new_sup_state
-  end
-
   defunp remove_pid_from_waiting_queue(state(waiting: waiting) = s :: state, pid :: pid) :: state do
     new_waiting = :queue.filter(&(!match?({{^pid, _}, _}, &1)), waiting)
     state(s, waiting: new_waiting)

@@ -61,4 +61,9 @@ defmodule PoolSup.CustomSupHelper do
     {:reply, {:ok, pid}, new_sup_state} = :supervisor.handle_call({:start_child, extra}, nil, sup_state)
     {pid, new_sup_state}
   end
+
+  defun terminate_child(pid :: pid, sup_state :: sup_state) :: sup_state do
+    {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, nil, sup_state)
+    new_sup_state
+  end
 end
