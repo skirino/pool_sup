@@ -85,7 +85,7 @@ defmodule PoolSup do
   @type  options      :: [name: GS.name]
   @typep client       :: {{pid, reference}, reference}
   @typep client_queue :: :queue.queue(client)
-  @typep sup_state    :: CustomSupHelper.sup_state
+  @typep sup_state    :: PoolSup.CustomSupHelper.sup_state
 
   require Record
   Record.defrecordp :state, [
@@ -108,7 +108,7 @@ defmodule PoolSup do
   )
 
   #
-  # external API
+  # client API
   #
   @doc """
   Starts a `PoolSup` process linked to the calling process.
@@ -450,16 +450,7 @@ defmodule PoolSup do
     state(s, waiting: new_waiting)
   end
 
-  def terminate(reason, state(sup_state: sup_state)) do
-    :supervisor.terminate(reason, sup_state)
-  end
+  code_change_default_clause
 
-  def code_change(old_vsn, state(sup_state: sup_state) = s, extra) do
-    case :supervisor.code_change(old_vsn, sup_state, extra) do
-      {:ok, new_sup_state} -> {:ok, state(s, sup_state: new_sup_state)}
-      {:error, reason}     -> {:error, reason}
-    end
-  end
-
-  defdelegate format_status(opt, list), to: PoolSup.CustomSupHelper
+  defdelegate [terminate(reason, state), format_status(opt, list)], to: PoolSup.CustomSupHelper
 end

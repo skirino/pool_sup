@@ -1,41 +1,53 @@
 defmodule PoolSupTest do
   use ExUnit.Case
-
-  defmodule W do
-    @behaviour PoolSup.Worker
-    use GenServer
-    def start_link(_) do
-      GenServer.start_link(__MODULE__, {}, [])
-    end
-  end
+  import CustomSupTest
 
   defp shutdown_pool(pool) do
     childs = Supervisor.which_children(pool) |> Enum.map(fn {_, pid, _, _} -> pid end)
     Supervisor.stop(pool)
+    :timer.sleep(1)
     refute Process.alive?(pool)
     refute Enum.any?(childs, &Process.alive?/1)
   end
 
   test "should behave as an ordinary supervisor" do
     {:ok, pid} = PoolSup.start_link(W, [], 3, 0, [name: __MODULE__])
-
-    children = Supervisor.which_children(pid)
-    assert length(children) == 3
-    assert Supervisor.which_children(pid) == children
-    assert Supervisor.count_children(pid)[:active] == 3
-
+    assert_which_children(pid, 3)
     shutdown_pool(pid)
   end
 
   test "should return error for start_child, terminate_child, restart_child, delete_child" do
     {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    {_, child, _, _} = Supervisor.which_children(pid) |> hd
+    assert_returns_error_for_prohibited_functions(pid)
+    shutdown_pool(pid)
+  end
 
-    assert Supervisor.start_child(pid, [])        == {:error, :pool_sup}
-    assert Supervisor.terminate_child(pid, child) == {:error, :simple_one_for_one}
-    assert Supervisor.restart_child(pid, :child)  == {:error, :simple_one_for_one}
-    assert Supervisor.delete_child(pid, :child)   == {:error, :simple_one_for_one}
+  test "should die when parent process dies" do
+    spec = Supervisor.Spec.supervisor(PoolSup, [W, [], 3, 0])
+    assert_dies_on_parent_process_dies(spec, 3)
+  end
 
+  test "should not be affected when other linked process dies" do
+    {:ok, pool_pid} = PoolSup.start_link(W, [], 3, 0)
+    assert_not_affected_when_non_child_linked_process_dies(pool_pid)
+    shutdown_pool(pool_pid)
+  end
+
+  test "should not be affected by info messages" do
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
+    assert_not_affected_by_info_messages(pid)
+    shutdown_pool(pid)
+  end
+
+  test "code_change/3 should return an ok-tuple" do
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
+    assert_code_change_returns_an_ok_tuple(PoolSup, pid)
+    shutdown_pool(pid)
+  end
+
+  test "should pretend as a supervisor when :sys.get_status/1 is called" do
+    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
+    assert_pretends_as_a_supervisor_on_get_status(pid)
     shutdown_pool(pid)
   end
 
@@ -129,75 +141,6 @@ defmodule PoolSupTest do
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
     PoolSup.checkin(pid, w2)
     assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
-
-    shutdown_pool(pid)
-  end
-
-  test "should die when parent process dies" do
-    spec = Supervisor.Spec.supervisor(PoolSup, [W, [], 3, 0])
-    {:ok, parent_pid} = Supervisor.start_link([spec], strategy: :one_for_one)
-    assert Process.alive?(parent_pid)
-    [{PoolSup, pool_pid, :supervisor, [PoolSup]}] = Supervisor.which_children(parent_pid)
-    assert Process.alive?(pool_pid)
-    child_pids = Supervisor.which_children(pool_pid) |> Enum.map(fn {_, pid, _, _} -> pid end)
-    assert length(child_pids) == 3
-    assert Enum.all?(child_pids, &Process.alive?/1)
-
-    Supervisor.stop(parent_pid)
-    refute Process.alive?(parent_pid)
-    refute Process.alive?(pool_pid)
-    refute Enum.any?(child_pids, &Process.alive?/1)
-  end
-
-  test "should not be affected when other linked process dies" do
-    {:ok, pool_pid} = PoolSup.start_link(W, [], 3, 0)
-    linked_pid = spawn(fn ->
-      Process.link(pool_pid)
-      :timer.sleep(10_000)
-    end)
-    state_before = :sys.get_state(pool_pid)
-    Process.exit(linked_pid, :shutdown)
-    assert :sys.get_state(pool_pid) == state_before
-    shutdown_pool(pool_pid)
-  end
-
-  test "should not be affected by some info messages" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    state = :sys.get_state(pid)
-    send(pid, :timeout)
-    assert :sys.get_state(pid) == state
-
-    mref = Process.monitor(pid)
-    send(pid, {:DOWN, mref, :process, self, :shutdown})
-    assert :sys.get_state(pid) == state
-
-    shutdown_pool(pid)
-  end
-
-  test "code_change/3 should return an ok-tuple" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    state = :sys.get_state(pid)
-    {:ok, _} = PoolSup.code_change('0.1.2', state, [])
-    shutdown_pool(pid)
-  end
-
-  test "should pretend as a supervisor when :sys.get_status/1 is called" do
-    {:ok, pid} = PoolSup.start_link(W, [], 3, 0)
-    {:state, sup_state, _, _, _, _, _, _} = :sys.get_state(pid)
-    {:status, _pid, {:module, _mod}, [_pdict, _sysstate, _parent, _dbg, misc]} = :sys.get_status(pid)
-    [_header, _data, {:data, [{'State', state_from_get_status}]}] = misc
-    assert state_from_get_status == sup_state
-
-    # supervisor:get_callback_module/1 since Erlang/OTP 18.3, which internally uses sys:get_status/1
-    otp_version_path = Path.join([:code.root_dir, "releases", :erlang.system_info(:otp_release), "OTP_VERSION"])
-    otp_version =
-      case File.read!(otp_version_path) |> String.rstrip |> String.split(".") |> Enum.map(&String.to_integer/1) do
-        [major, minor]        -> {major, minor, 0    }
-        [major, minor, patch] -> {major, minor, patch}
-      end
-    if otp_version >= {18, 3, 0} do
-      assert :supervisor.get_callback_module(pid) == PoolSup.Callback
-    end
 
     shutdown_pool(pid)
   end

@@ -3,14 +3,11 @@ use Croma
 defmodule PoolSup.CustomSupHelper do
   @moduledoc false
 
-  @typep sup_state :: term
+  @type sup_state :: term
 
-  defmacro is_nil_or_nni(v) do
-    quote do
-      is_nil(unquote(v)) or is_integer(unquote(v)) and unquote(v) >= 0
-    end
-  end
-
+  #
+  # common gen_server callbacks
+  #
   defmacro handle_call_default_clauses do
     quote do
       # we don't support start_child/terminate_child operation; interrupt those messages here
@@ -27,6 +24,35 @@ defmodule PoolSup.CustomSupHelper do
     end
   end
 
+  defmacro code_change_default_clause do
+    quote do
+      def code_change(old_vsn, state(sup_state: sup_state) = s, extra) do
+        case :supervisor.code_change(old_vsn, sup_state, extra) do
+          {:ok, new_sup_state} -> {:ok, state(s, sup_state: new_sup_state)}
+          {:error, reason}     -> {:error, reason}
+        end
+      end
+    end
+  end
+
+  def terminate(reason, state) do
+    :supervisor.terminate(reason, elem(state, 1))
+  end
+
+  # We need to define `format_status` to pretend as if it's an ordinary supervisor when `sys:get_status/1` is called
+  # (assuming that `sup_state` is the first element in record)
+  def format_status(:terminate, [_pdict, state]), do: state
+  def format_status(:normal   , [_pdict, state]), do: [{:data, [{'State', elem(state, 1)}]}]
+
+  #
+  # helpers
+  #
+  defmacro is_nil_or_nni(v) do
+    quote do
+      is_nil(unquote(v)) or is_integer(unquote(v)) and unquote(v) >= 0
+    end
+  end
+
   defun gen_server_opts(opts :: Keyword.t(any)) :: [name: GenServer.name] do
     Enum.filter(opts, &match?({:name, _}, &1))
   end
@@ -35,9 +61,4 @@ defmodule PoolSup.CustomSupHelper do
     {:reply, {:ok, pid}, new_sup_state} = :supervisor.handle_call({:start_child, extra}, nil, sup_state)
     {pid, new_sup_state}
   end
-
-  # We need to define `format_status` to pretend as if it's an ordinary supervisor when `sys:get_status/1` is called
-  # (assuming that `sup_state` is the first element in record)
-  def format_status(:terminate, [_pdict, state]), do: state
-  def format_status(:normal   , [_pdict, state]), do: [{:data, [{'State', elem(state, 1)}]}]
 end
