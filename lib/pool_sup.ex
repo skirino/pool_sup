@@ -78,31 +78,14 @@ defmodule PoolSup do
   alias Supervisor, as: S
   alias GenServer, as: GS
   use GS
+  alias  PoolSup.{PidSet, Callback}
   import PoolSup.CustomSupHelper
-
-  defmodule Callback do
-    @moduledoc false
-    # The sole purpose of this module is to suppress dialyzer warning;
-    # using `Supervisor.Default` results in a warning due to (seemingly) incorrect typespec of
-    # `supervisor:init/1` (which is an implementation of `gen_server:init/1` callback, not callback of supervisor behaviour).
-    @behaviour :supervisor
-    def init([arg]), do: arg
-  end
-
-  defmodule PidSet do
-    @moduledoc false
-    @type t :: %{pid => true}
-    defun new                           :: t      , do: %{}
-    defun member?(set :: t, pid :: pid) :: boolean, do: Map.has_key?(set, pid)
-    defun put(set :: t, pid :: pid)     :: t      , do: Map.put(set, pid, true)
-    defun delete(set :: t, pid :: pid)  :: t      , do: Map.delete(set, pid)
-  end
 
   @type  pool         :: pid | GS.name
   @type  options      :: [name: GS.name]
   @typep client       :: {{pid, reference}, reference}
   @typep client_queue :: :queue.queue(client)
-  @typep sup_state    :: term
+  @typep sup_state    :: CustomSupHelper.sup_state
 
   require Record
   Record.defrecordp :state, [
@@ -273,17 +256,8 @@ defmodule PoolSup do
     }
     {:reply, r, s}
   end
-  def handle_call({:start_child, _}, _from, s) do
-    {:reply, {:error, :pool_sup}, s}
-  end
-  def handle_call({:terminate_child, _}, _from, s) do
-    # returns `:simple_one_for_one` to obey type contract of `Supervisor.terminate_child/2`
-    {:reply, {:error, :simple_one_for_one}, s}
-  end
-  def handle_call(msg, from, state(sup_state: sup_state) = s) do
-    {:reply, reply, new_sup_state} = :supervisor.handle_call(msg, from, sup_state)
-    {:reply, reply, state(s, sup_state: new_sup_state)}
-  end
+
+  handle_call_default_clauses
 
   defunp reply_with_available_worker(pid :: pid, pids :: [pid], state(working: working) = s :: state) :: {:reply, pid, state} do
     {:reply, pid, state(s, working: PidSet.put(working, pid), available: pids)}
@@ -458,13 +432,8 @@ defmodule PoolSup do
     state(s, sup_state: new_sup_state, all: PidSet.put(all, pid), available: [pid | available])
   end
 
-  defunp start_child(sup_state :: sup_state) :: {pid, sup_state} do
-    {:reply, {:ok, pid}, new_sup_state} = :supervisor.handle_call({:start_child, []}, self, sup_state)
-    {pid, new_sup_state}
-  end
-
   defunp terminate_child(pid :: pid, sup_state :: sup_state) :: sup_state do
-    {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, self, sup_state)
+    {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, nil, sup_state)
     new_sup_state
   end
 
