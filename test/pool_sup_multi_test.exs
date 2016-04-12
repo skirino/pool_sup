@@ -9,13 +9,13 @@ defmodule PoolSup.MultiTest do
     try do
       {:ok, pid} = Multi.start_link(table_id, @multi_id, n_pools, W, [], reserved, ondemand)
       f.(table_id, pid)
-      shutdown_pool_multi(pid)
+      shutdown_pool_multi(pid, table_id)
     after
       :ets.delete(table_id)
     end
   end
 
-  defp shutdown_pool_multi(pid) do
+  defp shutdown_pool_multi(pid, table_id) do
     children = child_pids(pid)
     grand_children = Enum.flat_map(children, &child_pids/1)
     all_decendants = children ++ grand_children
@@ -23,6 +23,7 @@ defmodule PoolSup.MultiTest do
     :timer.sleep(1)
     refute Process.alive?(pid)
     refute Enum.any?(all_decendants, &Process.alive?/1)
+    assert :ets.lookup(table_id, @multi_id) == []
   end
 
   defp child_pids(pid) do

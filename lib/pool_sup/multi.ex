@@ -49,14 +49,15 @@ defmodule PoolSup.Multi do
   alias Supervisor, as: S
   alias GenServer, as: GS
   use GS
-  alias  PoolSup.PidSet
-  import PoolSup.CustomSupHelper
+  alias PoolSup.PidSet
+  alias PoolSup.CustomSupHelper, as: H
+  require H
 
   @type  pool_multi     :: pid | GS.name
   @type  pool_multi_key :: term
   @type  pool_sup_args  :: [module | term | non_neg_integer | non_neg_integer]
   @type  options        :: [name: GS.name]
-  @typep sup_state      :: PoolSup.CustomSupHelper.sup_state
+  @typep sup_state      :: H.sup_state
 
   require Record
   Record.defrecordp :state, [
@@ -106,7 +107,7 @@ defmodule PoolSup.Multi do
                    ondemand        :: g[non_neg_integer],
                    options         :: options \\ []) :: GS.on_start do
     init_arg = {table_id, pool_multi_key, n_pools, worker_module, worker_init_arg, reserved, ondemand, options}
-    GS.start_link(__MODULE__, init_arg, gen_server_opts(options))
+    GS.start_link(__MODULE__, init_arg, H.gen_server_opts(options))
   end
 
   @doc """
@@ -193,7 +194,7 @@ defmodule PoolSup.Multi do
                              new_reserved :: nil_or_nni,
                              new_ondemand :: nil_or_nni) :: :ok when nil_or_nni: nil | non_neg_integer do
     (_          , nil, nil, nil) -> :ok
-    (pid_or_name, n  , r  , o  ) when is_nil_or_nni(n) and is_nil_or_nni(r) and is_nil_or_nni(o) ->
+    (pid_or_name, n  , r  , o  ) when H.is_nil_or_nni(n) and H.is_nil_or_nni(r) and H.is_nil_or_nni(o) ->
       GenServer.cast(pid_or_name, {:change_configuration, n, r, o})
   end
 
@@ -224,7 +225,7 @@ defmodule PoolSup.Multi do
     if pools_to_add == 0 do
       sup_state
     else
-      {_pid, new_sup_state} = start_child(sup_state, [reserved, ondemand])
+      {_pid, new_sup_state} = H.start_child(sup_state, [reserved, ondemand])
       spawn_pools(new_sup_state, pools_to_add - 1, reserved, ondemand)
     end
   end
@@ -247,7 +248,7 @@ defmodule PoolSup.Multi do
     Enum.map(r, fn {_, pid, _, _} -> pid end)
   end
 
-  handle_call_default_clauses
+  H.handle_call_default_clauses
 
   def handle_cast({:change_configuration, n_pools, reserved1, ondemand1},
                   state(sup_state: sup_state, reserved: reserved0, ondemand: ondemand0) = s) do
@@ -306,7 +307,7 @@ defmodule PoolSup.Multi do
     new_terminating_pools = Enum.reduce(terminatable_pool_pids, terminating_pools, &PidSet.delete(&2, &1))
     new_sup_state =
       Enum.reduce(terminatable_pool_pids, sup_state0, fn(pool_pid, sup_state) ->
-        terminate_child(pool_pid, sup_state)
+        H.terminate_child(pool_pid, sup_state)
       end)
     s2 = state(s, sup_state: new_sup_state, terminating_pools: new_terminating_pools)
     if !Enum.empty?(new_terminating_pools) do
@@ -319,7 +320,7 @@ defmodule PoolSup.Multi do
       {:EXIT, pid, _reason} ->
         if PidSet.member?(terminating_pools, pid) do
           # We know that the `pid` already died and we can use `terminate_child` to clean up `sup_state`
-          new_sup_state = terminate_child(pid, sup_state)
+          new_sup_state = H.terminate_child(pid, sup_state)
           new_terminating_pools = PidSet.delete(terminating_pools, pid)
           {:noreply, state(s, sup_state: new_sup_state, terminating_pools: new_terminating_pools)}
         else
@@ -336,7 +337,12 @@ defmodule PoolSup.Multi do
     state(s, sup_state: new_sup_state)
   end
 
-  code_change_default_clause
+  def terminate(reason, state(table_id: table_id, pool_multi_key: pool_multi_key) = s) do
+    :ets.delete(table_id, pool_multi_key)
+    H.terminate(reason, s)
+  end
 
-  defdelegate [terminate(reason, state), format_status(opt, list)], to: PoolSup.CustomSupHelper
+  H.code_change_default_clause
+
+  defdelegate [terminate(reason, state), format_status(opt, list)], to: H
 end
