@@ -12,6 +12,7 @@ defmodule PoolSup do
   - `PoolSup` automatically restart crashed workers.
   - Functions to request pid of an available worker process: `checkout/2`, `checkout_nonblocking/2`.
   - Run-time configuration of pool size: `change_capacity/3`.
+  - Load-balancing using multiple pools: `PoolSup.Multi`.
 
   ## Example
 
@@ -34,11 +35,11 @@ defmodule PoolSup do
   Each worker process is started using `MyWorker.start_link({:worker, :arg})`.
   Then we can get a pid of a child currently not in use:
 
-      iex(3)> child_pid = PoolSup.checkout(:my_pool)
-      iex(4)> do_something(child_pid)
-      iex(5)> PoolSup.checkin(:my_pool, child_pid)
+      iex(3)> worker_pid = PoolSup.checkout(:my_pool)
+      iex(4)> do_something(worker_pid)
+      iex(5)> PoolSup.checkin(:my_pool, worker_pid)
 
-  Don't forget to return the `child_pid` when finished; for simple use cases `PoolSup.transaction/3` comes in handy.
+  Don't forget to return the `worker_pid` when finished; for simple use cases `PoolSup.transaction/3` comes in handy.
 
   ## Reserved and on-demand worker processes
 
@@ -69,7 +70,7 @@ defmodule PoolSup do
       ]
       Supervisor.start_link(children, [strategy: :one_for_one])
 
-  The `PoolSup` process initially has 5 workers and can temporarily have upto 8.
+  The `PoolSup` process initially has 5 workers and can temporarily have up to 8.
   All workers are started by `MyWorker.start_link({:worker, :arg})`.
 
   You can of course define a wrapper function of `PoolSup.start_link/4` and use it in your supervisor spec.
@@ -189,7 +190,7 @@ defmodule PoolSup do
 
   On receipt of `change_capacity` message, the pool adjusts number of children according to the new configuration as follows:
 
-  - If current number of workers are less than `reserved`, spawn new workers to ensure `reserved` workers are available.
+  - If current number of workers are less than `reserved`, the pool spawns new workers to ensure `reserved` workers are available.
     Note that, as is the same throughout the OTP framework, spawning processes under a supervisor is synchronous operation.
     Therefore increasing `reserved` too many at once may make the pool unresponsive for a while.
   - When increasing maximum capacity (`reserved + ondemand`) and if any client process is being checking-out in a blocking manner,

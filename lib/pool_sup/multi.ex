@@ -2,7 +2,48 @@ use Croma
 
 defmodule PoolSup.Multi do
   @moduledoc """
-  TODO
+  Defines a supervisor that is specialized to manage multiple `PoolSup` processes.
+
+  For high-throughput use cases, centralized process pool such as `PoolSup`
+  may become a bottleneck as all the messages must be handled by the pool manager process.
+  This module is for these situations: to manage multiple `PoolSup`s and
+  load-balance checkout requests to multiple pool manager processes.
+
+  In summary,
+
+  - Process defined by `PoolSup.Multi` behaves as a `:simple_one_for_one` supervisor.
+  - Children of `PoolSup.Multi` are `PoolSup` processes and they have identical configurations (worker module, capacity, etc.).
+  - `checkout/3`, `checkout_nonblocking/3` and `transaction/4` which randomly picks a pool
+    in a `PoolSup.Multi` (with the help of ETS) are provided.
+  - Number of pools and capacity of each pool are dynamically configurable.
+
+  ## Example
+
+  Suppose we have the following worker module:
+
+      iex(1)> defmodule MyWorker do
+      ...(1)>   @behaviour PoolSup.Worker
+      ...(1)>   use GenServer
+      ...(1)>   def start_link(arg) do
+      ...(1)>     GenServer.start_link(__MODULE__, arg)
+      ...(1)>   end
+      ...(1)>   # definitions of gen_server callbacks...
+      ...(1)> end
+
+  To use `PoolSup.Multi` it's necessary to setup an ETS table.
+
+      iex(2)> table_id = :ets.new(:arbitrary_table_name, [:set, :public, {:read_concurrency, true}])
+
+  Note that the `PoolSup.Multi` process must be able to write to the table.
+  The following creates a `PoolSup.Multi` process that has 3 `PoolSup`s each of which manages 5 reserved and 2 ondemand workers.
+
+      iex(3)> {:ok, pool_multi_pid} = PoolSup.Multi.start_link(table_id, "arbitrary_key", 3, MyWorker, {:worker, :arg}, 5, 2)
+
+  Now we can checkout a worker pid from the set of pools:
+
+      iex(4)> {pool_pid, worker_pid} = PoolSup.Multi.checkout(table_id, "arbitrary_key")
+      iex(5)> do_something(worker_pid)
+      iex(6)> PoolSup.checkin(pool_pid, worker_pid)
   """
 
   alias Supervisor, as: S
@@ -41,7 +82,20 @@ defmodule PoolSup.Multi do
   # client API
   #
   @doc """
-  TODO
+  Starts a `PoolSup.Multi` process linked to the calling process.
+
+  ## Arguments
+
+  - `table_id`: ID of the ETS table to use.
+  - `pool_multi_key`: Key to identify the record in the ETS table.
+    Note that `PoolSup.Multi` keeps track of the `PoolSup`s within a single ETS record.
+    Thus multiple instances of `PoolSup.Multi` can share the same ETS table (as long as they use unique keys).
+  - `n_pools`: Number of pools.
+  - `worker_module`: Callback module of `PoolSup.Worker`.
+  - `worker_init_arg`: Value passed to `worker_module.start_link/1`.
+  - `reserved`: Number of reserved workers in each `PoolSup`.
+  - `ondemand`: Number of ondemand workers in each `PoolSup`.
+  - `options`: Currently only `:name` option for name registration is supported.
   """
   defun start_link(table_id        :: :ets.tab,
                    pool_multi_key  :: pool_multi_key,
@@ -56,16 +110,13 @@ defmodule PoolSup.Multi do
   end
 
   @doc """
-  TODO
-  """
-  defun change_configuration(name :: pools, n_pools :: nil_or_nni, reserved :: nil_or_nni, ondemand :: nil_or_nni) :: :ok when nil_or_nni: nil | non_neg_integer do
-    (_   , nil, nil, nil) -> :ok
-    (name, n  , r  , o  ) when is_nil_or_nni(n) and is_nil_or_nni(r) and is_nil_or_nni(o) ->
-      GenServer.cast(name, {:change_configuration, n, r, o})
-  end
+  Checks out a worker pid that is currently not used.
 
-  @doc """
-  TODO
+  Internally this function looks-up the specified ETS record,
+  randomly chooses one of the pools and checks-out a worker in the pool.
+
+  Note that this function returns a pair of `pid`s: `{pool_pid, worker_pid}`.
+  The returned `pool_pid` must be used when returning the worker to the pool: `PoolSup.checkin(pool_pid, worker_pid)`.
   """
   defun checkout(table_id :: :ets.tab, pool_multi_key :: pool_multi_key, timeout :: timeout \\ 5000) :: {pid, pid} do
     checkout_common(table_id, pool_multi_key, fn pool_pid ->
@@ -74,7 +125,7 @@ defmodule PoolSup.Multi do
   end
 
   @doc """
-  TODO
+  Checks out a worker pid in a nonblocking manner, i.e. if no available worker found in the randomly chosen pool this returns `nil`.
   """
   defun checkout_nonblocking(table_id :: :ets.tab, pool_multi_key :: pool_multi_key, timeout :: timeout \\ 5000) :: nil | {pid, pid} do
     checkout_common(table_id, pool_multi_key, fn pool_pid ->
@@ -103,7 +154,10 @@ defmodule PoolSup.Multi do
   end
 
   @doc """
-  TODO
+  Picks a pool from the specified ETS record, checks out a worker pid, executes the given function using the pid,
+  and then checks in the pid.
+
+  The `timeout` parameter is used only in the checkout step; time elapsed during other steps are not counted.
   """
   defun transaction(table_id :: :ets.tab, pool_multi_key :: pool_multi_key, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: term do
     {pool_pid, worker_pid} = checkout(table_id, pool_multi_key, timeout)
@@ -112,6 +166,35 @@ defmodule PoolSup.Multi do
     after
       PoolSup.checkin(pool_pid, worker_pid)
     end
+  end
+
+  @doc """
+  Changes configuration of an existing `PoolSup.Multi` process.
+
+  `new_n_pools`, `new_reserved` and/or `new_ondemand` parameters can be `nil`; in that case the original value is kept unchanged.
+
+  ## Changing number of pools
+
+  - When `new_n_pools` is larger than the current number of working pools, `PoolSup.Multi` spawns new pools immediately.
+  - When `new_n_pools` is smaller than the current number of working pools, `PoolSup.Multi` process
+      - randomly chooses pools to terminate and mark them "not working",
+      - exclude those pools from the ETS record,
+      - resets their `reserved` and `ondemand` as `0` so that new checkouts will never succeed,
+      - starts to periodically poll the status of "not working" pools, and
+      - terminate a pool when it becomes ready to terminate (i.e. no worker process is used).
+
+  ## Changing `reserved` and/or `ondemand` of each pool
+
+  - The given values of `reserved`, `ondemand` are notified to all the working pools.
+  See `PoolSup.change_capacity/3` for the behaviour of each pool.
+  """
+  defun change_configuration(pid_or_name  :: pool_multi,
+                             new_n_pools  :: nil_or_nni,
+                             new_reserved :: nil_or_nni,
+                             new_ondemand :: nil_or_nni) :: :ok when nil_or_nni: nil | non_neg_integer do
+    (_          , nil, nil, nil) -> :ok
+    (pid_or_name, n  , r  , o  ) when is_nil_or_nni(n) and is_nil_or_nni(r) and is_nil_or_nni(o) ->
+      GenServer.cast(pid_or_name, {:change_configuration, n, r, o})
   end
 
   #
