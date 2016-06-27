@@ -344,5 +344,6 @@ defmodule PoolSup.Multi do
 
   H.code_change_default_clause
 
-  defdelegate [terminate(reason, state), format_status(opt, list)], to: H
+  defdelegate terminate(reason, state), to: H
+  defdelegate format_status(opt, list), to: H
 end
