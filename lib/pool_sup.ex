@@ -137,6 +137,13 @@ defmodule PoolSup do
   If no available worker process exists, the caller is blocked until either
   - any process becomes available, or
   - timeout is reached.
+
+  Note that when a pid is checked-out it must eventually be checked-in or die,
+  in order to correctly keep track of working processes and avoid process leaks.
+  For this purpose it's advisable to either
+
+  - link the checked-out process and the process who is going to check-in that process, or
+  - implement your worker to check-in itself at the end of each job.
   """
   defun checkout(pool :: pool, timeout :: timeout \\ 5000) :: pid do
     try do
@@ -163,16 +170,18 @@ defmodule PoolSup do
   end
 
   @doc """
-  Checks out a worker pid, executes the given function using the pid, and then checks in the pid.
+  Checks out a worker pid, creates a link, executes the given function using the pid, and finally checks-in and unlink the pid.
 
   The `timeout` parameter is used only in the checkout step; time elapsed during other steps are not counted.
   """
   defun transaction(pool :: pool, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: term do
     pid = checkout(pool, timeout)
     try do
+      Process.link(pid)
       f.(pid)
     after
       checkin(pool, pid)
+      Process.unlink(pid)
     end
   end
 

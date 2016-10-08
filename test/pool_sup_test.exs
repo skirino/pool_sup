@@ -124,7 +124,7 @@ defmodule PoolSupTest do
       end
 
       ensure_child_not_in_use.()
-      assert PoolSup.transaction(pid, fn _ -> :ok end) == :ok
+      assert PoolSup.transaction(pid, fn _ -> :foo end) == :foo
       ensure_child_not_in_use.()
       catch_error PoolSup.transaction(pid, fn _ -> raise "foo" end)
       ensure_child_not_in_use.()
@@ -132,6 +132,18 @@ defmodule PoolSupTest do
       ensure_child_not_in_use.()
       catch_exit PoolSup.transaction(pid, fn _ -> exit(:baz) end)
       ensure_child_not_in_use.()
+    end)
+  end
+
+  test "transaction/3 should correctly link the checked-out process so that termination of caller also terminates the worker process" do
+    with_pool(1, 0, fn pid ->
+      caller = spawn(fn ->
+        PoolSup.transaction(pid, fn _ -> :timer.sleep(10_000) end)
+      end)
+      :timer.sleep(1)
+      Process.exit(caller, :kill)
+      child = PoolSup.checkout(pid) # block if something is wrong
+      PoolSup.checkin(pid, child)
     end)
   end
 
