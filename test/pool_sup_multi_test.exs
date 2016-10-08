@@ -114,6 +114,18 @@ defmodule PoolSup.MultiTest do
     end)
   end
 
+  test "transaction/4 should correctly link the checked-out process so that termination of caller also terminates the worker process" do
+    with_multi(1, 1, 0, fn(table_id, _pid) ->
+      caller = spawn(fn ->
+        Multi.transaction(table_id, @multi_id, fn _ -> :timer.sleep(10_000) end)
+      end)
+      :timer.sleep(1)
+      Process.exit(caller, :kill)
+      {pool, worker} = Multi.checkout(table_id, @multi_id) # block if something is wrong
+      PoolSup.checkin(pool, worker)
+    end)
+  end
+
   test "should correctly reset capacity of child pools" do
     with_multi(2, 1, 0, fn(_table_id, pid) ->
       [pool1, pool2] = child_pids(pid)

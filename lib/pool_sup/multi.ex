@@ -155,17 +155,19 @@ defmodule PoolSup.Multi do
   end
 
   @doc """
-  Picks a pool from the specified ETS record, checks out a worker pid, executes the given function using the pid,
-  and then checks in the pid.
+  Picks a pool from the specified ETS record, checks out a worker pid, creates a link, executes the given function using the pid,
+  and finally checks-in and unlink the pid.
 
   The `timeout` parameter is used only in the checkout step; time elapsed during other steps are not counted.
   """
   defun transaction(table_id :: :ets.tab, pool_multi_key :: pool_multi_key, f :: (pid -> a), timeout :: timeout \\ 5000) :: a when a: term do
     {pool_pid, worker_pid} = checkout(table_id, pool_multi_key, timeout)
     try do
+      Process.link(worker_pid)
       f.(worker_pid)
     after
       PoolSup.checkin(pool_pid, worker_pid)
+      Process.unlink(worker_pid)
     end
   end
 
