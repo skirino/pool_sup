@@ -283,7 +283,7 @@ defmodule PoolSup.Multi do
         reset_pids_record(s, pools_to_keep)
         terminating_pools2 = Enum.reduce(pools_to_terminate, terminating_pools, &PidSet.put(&2, &1))
         Enum.each(pools_to_terminate, fn pid -> PoolSup.change_capacity(pid, 0, 0) end)
-        arrange_next_progress_check
+        arrange_next_progress_check()
         state(s, terminating_pools: terminating_pools2)
     end
   end
@@ -297,7 +297,7 @@ defmodule PoolSup.Multi do
   end
 
   defunp arrange_next_progress_check :: :ok do
-    _timer_ref_not_used = Process.send_after(self, :check_progress_of_termination, @termination_progress_check_interval)
+    _timer_ref_not_used = Process.send_after(self(), :check_progress_of_termination, @termination_progress_check_interval)
     :ok
   end
 
@@ -313,7 +313,7 @@ defmodule PoolSup.Multi do
       end)
     s2 = state(s, sup_state: new_sup_state, terminating_pools: new_terminating_pools)
     if !Enum.empty?(new_terminating_pools) do
-      arrange_next_progress_check
+      arrange_next_progress_check()
     end
     {:noreply, s2}
   end

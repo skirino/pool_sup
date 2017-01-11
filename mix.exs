@@ -6,13 +6,13 @@ defmodule PoolSup.Mixfile do
   def project do
     [
       app:             :pool_sup,
-      version:         "0.2.4",
+      version:         "0.2.5",
       elixir:          "~> 1.2",
       build_embedded:  Mix.env == :prod,
       start_permanent: Mix.env == :prod,
-      deps:            deps,
+      deps:            deps(),
       description:     "A supervisor specialized to manage pool of workers",
-      package:         package,
+      package:         package(),
       source_url:      @github_url,
       homepage_url:    @github_url,
       test_coverage:   [tool: Coverex.Task, coveralls: true],

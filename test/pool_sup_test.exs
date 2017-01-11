@@ -70,7 +70,7 @@ defmodule PoolSupTest do
 
       # checkin not-working pid => no effect
       assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
-      PoolSup.checkin(pid, self)
+      PoolSup.checkin(pid, self())
       assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
       PoolSup.checkin(pid, child1)
       assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
@@ -87,7 +87,7 @@ defmodule PoolSupTest do
       ^worker1 = PoolSup.checkout(pid)
       catch_exit PoolSup.checkout(pid, 10)
 
-      current_test_pid = self
+      current_test_pid = self()
       f = fn ->
         send(current_test_pid, PoolSup.checkout(pid))
       end
@@ -105,7 +105,7 @@ defmodule PoolSupTest do
 
       # waiting clients should receive pids when available
       PoolSup.checkin(pid, worker2)
-      assert_receive(worker2, 10)
+      assert_receive(^worker2, 10)
       refute Process.alive?(checkout_pid1)
 
       Process.exit(worker3, :shutdown)
@@ -166,8 +166,8 @@ defmodule PoolSupTest do
 
   test "invariance should hold on every step of randomly generated sequence of operations" do
     Enum.each(1..30, fn _ ->
-      initial_reserved = pick_capacity_initial
-      initial_ondemand = pick_capacity_initial
+      initial_reserved = pick_capacity_initial()
+      initial_ondemand = pick_capacity_initial()
       with_pool(initial_reserved, initial_ondemand, fn pid ->
         initial_context = initial_context(pid, initial_reserved, initial_ondemand)
         assert_invariance_hold(pid, initial_context, nil)
@@ -196,7 +196,7 @@ defmodule PoolSupTest do
       cmd_checkout_or_catch:    [],
       cmd_checkout_wait:        [],
       cmd_checkin:              [],
-      cmd_change_capacity:      [pick_capacity, pick_capacity],
+      cmd_change_capacity:      [pick_capacity(), pick_capacity()],
       cmd_kill_running_worker:  [],
       cmd_kill_idle_worker:     [],
       cmd_kill_waiting_client:  [],
@@ -204,7 +204,7 @@ defmodule PoolSupTest do
   end
 
   defp run_cmd(context) do
-    {fname, args} = cmd = pick_cmd
+    {fname, args} = cmd = pick_cmd()
     context2 = apply(__MODULE__, fname, [context | args])
     %{context2 | cmds: [cmd | context[:cmds]]}
   end
@@ -239,7 +239,7 @@ defmodule PoolSupTest do
   end
 
   defp all_corresponds_to_child_pids?(all, sup_state) do
-    {:reply, r, _} = :supervisor.handle_call(:which_children, self, sup_state)
+    {:reply, r, _} = :supervisor.handle_call(:which_children, self(), sup_state)
     sup_child_pids = Enum.into(r, MapSet.new, fn {_, pid, _, _} -> pid end)
     all_child_pids = Map.keys(all) |> Enum.into(MapSet.new)
     all_child_pids == sup_child_pids
@@ -297,10 +297,10 @@ defmodule PoolSupTest do
   def cmd_checkout_wait(context) do
     checked_out = context[:checked_out]
     if length(checked_out) >= context[:reserved] + context[:ondemand] do
-      self_pid = self
+      self_pid = self()
       checkout_pid = spawn(fn ->
         worker_pid = PoolSup.checkout(context[:pid], :infinity)
-        send(self_pid, {self, worker_pid})
+        send(self_pid, {self(), worker_pid})
       end)
       assert Process.alive?(checkout_pid)
       :timer.sleep(1) # Gives the newly-spawned process a timeslice

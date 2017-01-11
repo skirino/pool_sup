@@ -174,7 +174,7 @@ defmodule PoolSup.MultiTest do
     # Note that this test case is not deterministic;
     # this triggers client retries for around 50% of the time (in the current development environment).
     with_multi(1, 1, 0, fn(table_id, pid) ->
-      this_pid = self
+      this_pid = self()
       spawn_link(fn ->
         Enum.each(1..500000, fn _ ->
           {pool, worker} = Multi.checkout(table_id, @multi_id)

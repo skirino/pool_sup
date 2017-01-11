@@ -78,7 +78,7 @@ defmodule CustomSupTest do
     assert state_from_get_status == sup_state
 
     # supervisor:get_callback_module/1 (since Erlang/OTP 18.3), which internally uses sys:get_status/1
-    if otp_version >= {18, 3, 0} do
+    if otp_version() >= {18, 3, 0} do
       assert :supervisor.get_callback_module(pid) == PoolSup.Callback
     end
   end
