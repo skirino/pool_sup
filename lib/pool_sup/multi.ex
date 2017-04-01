@@ -149,9 +149,11 @@ defmodule PoolSup.Multi do
   defunp pick_pool(table_id :: :ets.tab, pool_multi_key :: pool_multi_key, dead_pids) :: pid do
     pid_tuple0 = :ets.lookup_element(table_id, pool_multi_key, 2)
     pid_tuple  = if Enum.empty?(dead_pids), do: pid_tuple0, else: List.to_tuple(Tuple.to_list(pid_tuple0) -- dead_pids)
-    size = tuple_size(pid_tuple)
-    if size == 0, do: raise "no pool available"
-    elem(pid_tuple, abs(rem(System.monotonic_time, size))) # use modulo of nano-second time to pick a pool
+    case tuple_size(pid_tuple) do
+      0    -> raise "no pool available"
+      1    -> elem(pid_tuple, 0)
+      size -> elem(pid_tuple, :erlang.phash2(self(), size))
+    end
   end
 
   @doc """

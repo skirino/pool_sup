@@ -78,6 +78,18 @@ defmodule PoolSup.MultiTest do
     end)
   end
 
+  defp spawn_receive(f) do
+    caller = self()
+    spawn(fn ->
+      send(caller, f.())
+    end)
+    receive do
+      reply -> reply
+    after
+      1000 -> raise "no reply!"
+    end
+  end
+
   test "should appropriately checkout worker using a record in ETS table" do
     with_multi(3, 4, 0, fn(table_id, pid) ->
       children = child_pids(pid)
@@ -88,7 +100,11 @@ defmodule PoolSup.MultiTest do
       assert worker in grand_children
       PoolSup.checkin(pool, worker)
 
-      results = Enum.map(1..1000, fn _ -> Multi.checkout_nonblocking(table_id, @multi_id) end) |> Enum.reject(&is_nil/1)
+      results =
+        Enum.map(1..1000, fn _ ->
+          spawn_receive(fn -> Multi.checkout_nonblocking(table_id, @multi_id) end)
+        end)
+        |> Enum.reject(&is_nil/1)
       assert length(results) == 12
       assert Enum.map(results, fn {p, _} -> p end) |> Enum.sort == List.duplicate(children, 4) |> List.flatten |> Enum.sort
       assert Enum.map(results, fn {_, w} -> w end) |> Enum.sort == Enum.sort(grand_children)
