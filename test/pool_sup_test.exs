@@ -232,10 +232,12 @@ defmodule PoolSupTest do
     end
   end
 
-  defp data_type_correct?(all, working, available, waiting) do
-    all_pid? = [Map.keys(all), Map.keys(working), available] |> List.flatten |> Enum.all?(&is_pid/1)
+  defp data_type_correct?(all, {working1, working2}, available, waiting) do
+    working_set_inverted? = working1 == Map.new(working2, fn {ref, pid} -> {pid, ref} end)
+    all_pid? = [Map.keys(all), Map.keys(working1), available] |> List.flatten |> Enum.all?(&is_pid/1)
+    all_ref? = Map.values(working1) |> Enum.all?(&is_reference/1)
     all_pairs? = :queue.to_list(waiting) |> Enum.all?(fn {{pid, ref}, mref} -> is_pid(pid) and is_reference(ref) and is_reference(mref) end)
-    all_pid? and all_pairs?
+    working_set_inverted? and all_pid? and all_ref? and all_pairs?
   end
 
   defp all_corresponds_to_child_pids?(all, sup_state) do
@@ -245,12 +247,12 @@ defmodule PoolSupTest do
     all_child_pids == sup_child_pids
   end
 
-  defp union_of_working_and_available_equals_to_all?(all, working, available) do
-    Enum.into(available, working, fn pid -> {pid, true} end) == all
+  defp union_of_working_and_available_equals_to_all?(all, {working, _}, available) do
+    Enum.sort(available ++ Map.keys(working)) == Enum.sort(Map.keys(all))
   end
 
-  defp is_working_equal_to_checked_out_in_context?(working, checked_out) do
-    assert working == Enum.into(checked_out, %{}, fn pid -> {pid, true} end)
+  defp is_working_equal_to_checked_out_in_context?({working, _}, checked_out) do
+    Enum.sort(Map.keys(working)) == Enum.sort(checked_out)
   end
 
   defp is_all_processes_count_equal_to_reserved_when_any_child_available?(reserved, all, available) do
@@ -341,7 +343,7 @@ defmodule PoolSupTest do
   end
 
   def cmd_kill_idle_worker(context) do
-    {:state, _, _, _, all, working, _, _} = :sys.get_state(context[:pid])
+    {:state, _, _, _, all, {working, _}, _, _} = :sys.get_state(context[:pid])
     idle_workers = Map.keys(all) -- Map.keys(working)
     if !Enum.empty?(idle_workers) do
       worker = Enum.random(idle_workers)
