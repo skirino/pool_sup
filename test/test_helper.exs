@@ -57,7 +57,7 @@ defmodule CustomSupTest do
 
   def assert_not_affected_by_info_messages(pid) do
     state = :sys.get_state(pid)
-    send(pid, :timeout)
+    send(pid, :arbitrary_message)
     assert :sys.get_state(pid) == state
 
     temp_pid = spawn(fn -> :ok end)
