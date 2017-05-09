@@ -148,7 +148,11 @@ defmodule PoolSup.Multi do
 
   defunp pick_pool(table_id :: :ets.tab, pool_multi_key :: pool_multi_key, dead_pids) :: pid do
     pid_tuple0 = :ets.lookup_element(table_id, pool_multi_key, 2)
-    pid_tuple  = if Enum.empty?(dead_pids), do: pid_tuple0, else: List.to_tuple(Tuple.to_list(pid_tuple0) -- dead_pids)
+    pid_tuple  =
+      case dead_pids do
+        [] -> pid_tuple0
+        _  -> List.to_tuple(Tuple.to_list(pid_tuple0) -- dead_pids)
+      end
     case tuple_size(pid_tuple) do
       0    -> raise "no pool available"
       1    -> elem(pid_tuple, 0)

@@ -330,10 +330,9 @@ defmodule PoolSup do
   end
 
   defunp handle_capacity_change(state(available: available) = s :: state) :: state do
-    if Enum.empty?(available) do
-      send_reply_to_waiting_clients_by_spawn(s)
-    else
-      terminate_extra_children(s) # As `available` worker exists, no client is currently waiting
+    case available do
+      [] -> send_reply_to_waiting_clients_by_spawn(s)
+      _  -> terminate_extra_children(s) # As `available` worker exists, no client is currently waiting
     end
     |> restock_children_upto_reserved()
   end
