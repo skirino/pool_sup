@@ -170,7 +170,7 @@ defmodule PoolSup do
   end
 
   @doc """
-  Checks out a worker pid, creates a link, executes the given function using the pid, and finally checks-in and unlink the pid.
+  Checks out a worker pid, creates a link to the worker, executes the given function using the pid, and finally checks-in and unlink.
 
   The `timeout` parameter is used only in the checkout step; time elapsed during other steps are not counted.
   """
