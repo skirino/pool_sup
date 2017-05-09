@@ -146,8 +146,9 @@ defmodule PoolSup do
   - implement your worker to check-in itself at the end of each job.
   """
   defun checkout(pool :: pool, timeout :: timeout \\ 5000) :: pid do
+    cancel_ref = make_ref()
     try do
-      GenServer.call(pool, {:checkout, make_ref()}, timeout)
+      GenServer.call(pool, {:checkout, cancel_ref}, timeout)
     catch
       :exit, {:timeout, _} = reason ->
         GenServer.cast(pool, {:cancel_waiting, self()})
@@ -233,26 +234,26 @@ defmodule PoolSup do
 
   def handle_call(:checkout_nonblocking, {_, ref},
                   state(reserved: reserved, ondemand: ondemand, all: all, available: available) = s) do
+    # In nonblocking checkout we use `ref` in `from` tuple (as microoptimization to avoid creating new one),
+    # since in this case no cancellation would ever happen later and thus any reference would be OK.
     case available do
       [pid | pids] ->
-        # In nonblocking checkout we use `ref` in `from` tuple (as microoptimization to avoid creating new one),
-        # since in this case no cancellation would ever happen later and thus any reference would be OK.
         reply_with_available_worker(pid, pids, ref, s)
       [] ->
         if map_size(all) < reserved + ondemand do
-          reply_with_ondemand_worker(s)
+          reply_with_ondemand_worker(s, ref)
         else
           {:reply, nil, s}
         end
     end
   end
-  def handle_call({:checkout, ref}, from,
+  def handle_call({:checkout, cancel_ref}, from,
                   state(reserved: reserved, ondemand: ondemand, all: all, available: available) = s) do
     case available do
-      [pid | pids] -> reply_with_available_worker(pid, pids, ref, s)
+      [pid | pids] -> reply_with_available_worker(pid, pids, cancel_ref, s)
       []           ->
         if map_size(all) < reserved + ondemand do
-          reply_with_ondemand_worker(s)
+          reply_with_ondemand_worker(s, cancel_ref)
         else
           {:noreply, enqueue_client(s, from)}
         end
@@ -272,14 +273,13 @@ defmodule PoolSup do
 
   H.handle_call_default_clauses
 
-  defunp reply_with_available_worker(pid :: pid, pids :: [pid], ref :: reference, state(working: working) = s :: state) :: {:reply, pid, state} do
-    {:reply, pid, state(s, working: PidRefSet.put(working, pid, ref), available: pids)}
+  defunp reply_with_available_worker(pid :: pid, pids :: [pid], cancel_ref :: reference, state(working: working) = s :: state) :: {:reply, pid, state} do
+    {:reply, pid, state(s, working: PidRefSet.put(working, pid, cancel_ref), available: pids)}
   end
 
-  defunp reply_with_ondemand_worker(state(sup_state: sup_state, all: all, working: working) = s :: state) :: {:reply, pid, state} do
+  defunp reply_with_ondemand_worker(state(sup_state: sup_state, all: all, working: working) = s :: state, cancel_ref :: reference) :: {:reply, pid, state} do
     {new_child_pid, new_sup_state} = H.start_child(sup_state)
-    # TODO: extract ref from waiting queue
-    s2 = state(s, sup_state: new_sup_state, all: PidSet.put(all, new_child_pid), working: PidRefSet.put(working, new_child_pid, make_ref()))
+    s2 = state(s, sup_state: new_sup_state, all: PidSet.put(all, new_child_pid), working: PidRefSet.put(working, new_child_pid, cancel_ref))
     {:reply, new_child_pid, s2}
   end
 
@@ -315,12 +315,18 @@ defmodule PoolSup do
       size_all > reserved ->
         case dequeue_client(s) do
           nil        -> terminate_checked_in_child(s, pid)
-          {from, s2} -> GenServer.reply(from, pid); s2
+          {from, s2} ->
+            # TODO: update `working` as cancel_ref is now changed
+            GenServer.reply(from, pid)
+            s2
         end
       :otherwise ->
         case dequeue_client(s) do
           nil        -> state(s, working: PidRefSet.delete_by_pid(working, pid), available: [pid | available])
-          {from, s2} -> GenServer.reply(from, pid); s2
+          {from, s2} ->
+            # TODO: update `working` as cancel_ref is now changed
+            GenServer.reply(from, pid)
+            s2
         end
     end
   end
