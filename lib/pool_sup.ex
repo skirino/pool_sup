@@ -335,7 +335,7 @@ defmodule PoolSup do
     else
       terminate_extra_children(s) # As `available` worker exists, no client is currently waiting
     end
-    |> restock_children_upto_reserved
+    |> restock_children_upto_reserved()
   end
 
   defunp send_reply_to_waiting_clients_by_spawn(state(reserved: reserved,
@@ -356,7 +356,7 @@ defmodule PoolSup do
       []           -> s
       [pid | pids] ->
         if map_size(all) > reserved do
-          state(s, sup_state: H.terminate_child(pid, sup_state), all: PidSet.delete(all, pid), available: pids) |> terminate_extra_children
+          state(s, sup_state: H.terminate_child(pid, sup_state), all: PidSet.delete(all, pid), available: pids) |> terminate_extra_children()
         else
           s
         end
@@ -365,7 +365,7 @@ defmodule PoolSup do
 
   defunp restock_children_upto_reserved(state(reserved: reserved, all: all) = s :: state) :: state do
     if map_size(all) < reserved do
-      restock_child(s) |> restock_children_upto_reserved
+      restock_child(s) |> restock_children_upto_reserved()
     else
       s
     end
