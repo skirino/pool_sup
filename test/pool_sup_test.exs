@@ -164,17 +164,17 @@ defmodule PoolSupTest do
     end)
   end
 
-  test "invariance should hold on every step of randomly generated sequence of operations" do
+  test "invariants should hold on every step of randomly generated sequence of operations" do
     Enum.each(1..30, fn _ ->
       initial_reserved = pick_capacity_initial()
       initial_ondemand = pick_capacity_initial()
       with_pool(initial_reserved, initial_ondemand, fn pid ->
         initial_context = initial_context(pid, initial_reserved, initial_ondemand)
-        assert_invariance_hold(pid, initial_context, nil)
+        assert_invariants_hold(pid, initial_context, nil)
         Enum.reduce(1..100, initial_context, fn(_, context) ->
           state_before = :sys.get_state(pid)
           new_context = run_cmd(context)
-          assert_invariance_hold(pid, new_context, state_before)
+          assert_invariants_hold(pid, new_context, state_before)
           new_context
         end)
       end)
@@ -209,7 +209,7 @@ defmodule PoolSupTest do
     %{context2 | cmds: [cmd | context[:cmds]]}
   end
 
-  defp assert_invariance_hold(pid, context, state_before) do
+  defp assert_invariants_hold(pid, context, state_before) do
     {:state, sup_state, reserved, ondemand, all, working, available, waiting} = state_after = :sys.get_state(pid)
     try do
       assert reserved == context[:reserved]
