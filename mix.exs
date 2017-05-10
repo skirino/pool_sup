@@ -6,7 +6,7 @@ defmodule PoolSup.Mixfile do
   def project do
     [
       app:             :pool_sup,
-      version:         "0.2.6",
+      version:         "0.3.0",
       elixir:          "~> 1.2",
       build_embedded:  Mix.env == :prod,
       start_permanent: Mix.env == :prod,
@@ -19,11 +19,11 @@ defmodule PoolSup.Mixfile do
     ]
   end
 
-  def application do
+  def application() do
     []
   end
 
-  defp deps do
+  defp deps() do
     [
       {:croma  , "~> 0.4"},
       {:dialyze, "~> 0.2" , only: :dev},
@@ -32,7 +32,7 @@ defmodule PoolSup.Mixfile do
     ]
   end
 
-  defp package do
+  defp package() do
     [
       files:       ["lib", "mix.exs", "README.md", "LICENSE"],
       maintainers: ["Shunsuke Kirino"],
