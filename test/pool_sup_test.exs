@@ -99,9 +99,9 @@ defmodule PoolSupTest do
 
       # `waiting` queue should be restored when blocking checkout failed
       :timer.sleep(1)
-      state1 = :sys.get_state(pid)
+      {:state, a, b, c, d, e, f, {_waiting_queue, waiting_map}} = :sys.get_state(pid)
       catch_exit PoolSup.checkout(pid, 10)
-      assert :sys.get_state(pid) == state1
+      {:state, ^a, ^b, ^c, ^d, ^e, ^f, {_, ^waiting_map}} = :sys.get_state(pid)
 
       # waiting clients should receive pids when available
       PoolSup.checkin(pid, worker2)
@@ -219,9 +219,11 @@ defmodule PoolSupTest do
       assert union_of_working_and_available_equals_to_all?(all, working, available)
       assert is_working_equal_to_checked_out_in_context?(working, context[:checked_out])
       assert is_all_processes_count_equal_to_reserved_when_any_child_available?(reserved, all, available)
-      assert is_waiting_queue_empty_when_any_child_available?(available, waiting)
-      assert is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting)
-      assert is_waiting_queue_equal_to_client_queue_in_context?(waiting, context[:waiting])
+      assert cancel_refs_in_working_and_client_queue_disjoint?(working, waiting)
+      waiting_pids = waiting_pids_from_client_queue(waiting)
+      assert is_waiting_queue_empty_when_any_child_available?(available, waiting_pids)
+      assert is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting_pids)
+      assert is_waiting_queue_equal_to_client_queue_in_context?(waiting_pids, context[:waiting])
     rescue
       e ->
         commands_so_far = Enum.reverse(context[:cmds])
@@ -232,12 +234,16 @@ defmodule PoolSupTest do
     end
   end
 
-  defp data_type_correct?(all, {working1, working2}, available, waiting) do
-    working_set_inverted? = working1 == Map.new(working2, fn {ref, pid} -> {pid, ref} end)
-    all_pid? = [Map.keys(all), Map.keys(working1), available] |> List.flatten |> Enum.all?(&is_pid/1)
-    all_ref? = Map.values(working1) |> Enum.all?(&is_reference/1)
-    all_pairs? = :queue.to_list(waiting) |> Enum.all?(fn {{pid, ref}, mref} -> is_pid(pid) and is_reference(ref) and is_reference(mref) end)
-    working_set_inverted? and all_pid? and all_ref? and all_pairs?
+  defp data_type_correct?(all, {working1, working2}, available, {waiting_queue, waiting_map}) do
+    waiting_queue_list = :queue.to_list(waiting_queue)
+    Enum.all?([
+      [Map.keys(all), Map.keys(working1), available] |> List.flatten() |> Enum.all?(&is_pid/1),
+      Map.values(working1) |> Enum.all?(&is_reference/1),
+      Enum.all?(waiting_queue_list, fn {{pid, ref}, cref} -> is_pid(pid) and is_reference(ref) and is_reference(cref) end),
+      Enum.all?(waiting_map, fn {pid, {cref, mref}} -> is_pid(pid) and is_reference(cref) and is_reference(mref) end),
+      working1 == Map.new(working2, fn {ref, pid} -> {pid, ref} end),
+      MapSet.subset?(MapSet.new(waiting_map, fn {pid, _} -> pid end), MapSet.new(waiting_queue_list, fn {{pid, _}, _} -> pid end)),
+    ])
   end
 
   defp all_corresponds_to_child_pids?(all, sup_state) do
@@ -259,16 +265,32 @@ defmodule PoolSupTest do
     map_size(all) == reserved or Enum.empty?(available)
   end
 
-  defp is_waiting_queue_empty_when_any_child_available?(available, waiting) do
-    Enum.empty?(available) or :queue.is_empty(waiting)
+  defp cancel_refs_in_working_and_client_queue_disjoint?({m1, _}, {_, m2}) do
+    s1 = MapSet.new(Map.values(m1))
+    s2 = MapSet.new(m2, fn {_pid, {cancel_ref, _monitor_ref}} -> cancel_ref end)
+    MapSet.disjoint?(s1, s2)
   end
 
-  defp is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting) do
-    map_size(all) >= reserved + ondemand or :queue.is_empty(waiting)
+  defp waiting_pids_from_client_queue({waiting_queue, waiting_map}) do
+    :queue.to_list(waiting_queue)
+    |> Enum.map(fn {{pid, _}, cref} ->
+      case waiting_map[pid] do
+        {^cref, _mref} -> pid
+        _              -> nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
   end
 
-  defp is_waiting_queue_equal_to_client_queue_in_context?(waiting, waiting_in_context) do
-    waiting_pids = :queue.to_list(waiting) |> Enum.map(fn {{pid, _}, _} -> pid end)
+  defp is_waiting_queue_empty_when_any_child_available?(available, waiting_pids) do
+    Enum.empty?(available) or Enum.empty?(waiting_pids)
+  end
+
+  defp is_waiting_queue_empty_when_ondemand_child_available?(reserved, ondemand, all, waiting_pids) do
+    map_size(all) >= reserved + ondemand or Enum.empty?(waiting_pids)
+  end
+
+  defp is_waiting_queue_equal_to_client_queue_in_context?(waiting_pids, waiting_in_context) do
     assert waiting_pids == :queue.to_list(waiting_in_context)
   end
 

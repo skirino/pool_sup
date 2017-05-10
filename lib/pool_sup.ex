@@ -79,15 +79,13 @@ defmodule PoolSup do
   alias Supervisor, as: S
   alias GenServer, as: GS
   use GS
-  alias PoolSup.{PidSet, PidRefSet, Callback}
+  alias PoolSup.{PidSet, PidRefSet, ClientQueue, Callback}
   alias PoolSup.CustomSupHelper, as: H
   require H
 
-  @type  pool         :: pid | GS.name
-  @type  options      :: [name: GS.name]
-  @typep client       :: {{pid, reference}, reference}
-  @typep client_queue :: :queue.queue(client)
-  @typep sup_state    :: H.sup_state
+  @type  pool      :: pid | GS.name
+  @type  options   :: [name: GS.name]
+  @typep sup_state :: H.sup_state
 
   require Record
   Record.defrecordp :state, [
@@ -106,7 +104,7 @@ defmodule PoolSup do
     all:       PidSet.t,
     working:   PidRefSet.t,
     available: [pid],
-    waiting:   client_queue,
+    waiting:   ClientQueue.t,
   )
 
   #
@@ -151,7 +149,7 @@ defmodule PoolSup do
       GenServer.call(pool, {:checkout, cancel_ref}, timeout)
     catch
       :exit, {:timeout, _} = reason ->
-        GenServer.cast(pool, {:cancel_waiting, self()})
+        GenServer.cast(pool, {:cancel_waiting, self(), cancel_ref})
         :erlang.raise(:exit, reason, :erlang.get_stacktrace)
     end
   end
@@ -221,7 +219,7 @@ defmodule PoolSup do
   #
   def init({mod, init_arg, reserved, ondemand, opts}) do
     {:ok, sup_state} = :supervisor.init(supervisor_init_arg(mod, init_arg, opts))
-    s = state(sup_state: sup_state, reserved: reserved, ondemand: ondemand, all: PidSet.new(), working: PidRefSet.new(), available: [], waiting: :queue.new())
+    s = state(sup_state: sup_state, reserved: reserved, ondemand: ondemand, all: PidSet.new(), working: PidRefSet.new(), available: [], waiting: ClientQueue.new())
     {:ok, restock_children_upto_reserved(s)}
   end
 
@@ -255,7 +253,7 @@ defmodule PoolSup do
         if map_size(all) < reserved + ondemand do
           reply_with_ondemand_worker(s, cancel_ref)
         else
-          {:noreply, enqueue_client(s, from)}
+          {:noreply, enqueue_client(s, from, cancel_ref)}
         end
     end
   end
@@ -290,8 +288,8 @@ defmodule PoolSup do
       {:noreply, s}
     end
   end
-  def handle_cast({:cancel_waiting, pid}, s) do
-    {:noreply, remove_and_demonitor_pid_from_waiting_queue(s, pid)}
+  def handle_cast({:cancel_waiting, pid, cancel_ref}, s) do
+    {:noreply, cancel_client(s, pid, cancel_ref)}
   end
   def handle_cast({:change_capacity, new_reserved, new_ondemand}, s) do
     s2 = case {new_reserved, new_ondemand} do
@@ -381,7 +379,7 @@ defmodule PoolSup do
     s2 = state(s, sup_state: new_sup_state)
     s3 = case msg do
       {:EXIT, pid, _reason}                  -> handle_exit(s2, pid)
-      {:DOWN, _mref, :process, pid, _reason} -> remove_pid_from_waiting_queue(s2, pid)
+      {:DOWN, _mref, :process, pid, _reason} -> cancel_client(s2, pid, nil)
       _                                      -> s2
     end
     {:noreply, s3}
@@ -438,31 +436,19 @@ defmodule PoolSup do
     state(s, sup_state: new_sup_state, all: PidSet.put(all, pid), available: [pid | available])
   end
 
-  defunp enqueue_client(state(waiting: waiting) = s :: state, {client_pid, _ref} = from :: GenServer.from) :: state do
-    mref = Process.monitor(client_pid)
-    state(s, waiting: :queue.in({from, mref}, waiting))
+  defunp enqueue_client(state(waiting: waiting) = s :: state, from :: GenServer.from, cancel_ref :: reference) :: state do
+    state(s, waiting: ClientQueue.enqueue_and_monitor(waiting, from, cancel_ref))
   end
 
   defunp dequeue_client(state(waiting: waiting1) = s :: state) :: nil | {GenServer.from, state} do
-    case :queue.out(waiting1) do
-      {:empty                , _       } -> nil
-      {{:value, {from, mref}}, waiting2} ->
-        Process.demonitor(mref)
-        {from, state(s, waiting: waiting2)}
+    case ClientQueue.dequeue_and_demonitor(waiting1) do
+      nil              -> nil
+      {from, waiting2} -> {from, state(s, waiting: waiting2)}
     end
   end
 
-  defunp remove_pid_from_waiting_queue(state(waiting: waiting) = s :: state, pid :: pid) :: state do
-    new_waiting = :queue.filter(&(!match?({{^pid, _}, _}, &1)), waiting)
-    state(s, waiting: new_waiting)
-  end
-
-  defunp remove_and_demonitor_pid_from_waiting_queue(state(waiting: waiting) = s :: state, pid :: pid) :: state do
-    new_waiting = :queue.filter(fn
-      {{^pid, _}, mref} -> Process.demonitor(mref); false
-      _                 -> true
-    end, waiting)
-    state(s, waiting: new_waiting)
+  defunp cancel_client(state(waiting: waiting) = s :: state, pid :: pid, cancel_ref_or_nil :: nil | reference) :: state do
+    state(s, waiting: ClientQueue.cancel(waiting, pid, cancel_ref_or_nil))
   end
 
   H.code_change_default_clause
