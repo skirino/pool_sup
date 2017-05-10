@@ -248,8 +248,8 @@ defmodule PoolSupTest do
 
   defp all_corresponds_to_child_pids?(all, sup_state) do
     {:reply, r, _} = :supervisor.handle_call(:which_children, self(), sup_state)
-    sup_child_pids = Enum.into(r, MapSet.new, fn {_, pid, _, _} -> pid end)
-    all_child_pids = Map.keys(all) |> Enum.into(MapSet.new)
+    sup_child_pids = MapSet.new(r, fn {_, pid, _, _} -> pid end)
+    all_child_pids = Map.keys(all) |> MapSet.new()
     all_child_pids == sup_child_pids
   end
 
@@ -343,14 +343,14 @@ defmodule PoolSupTest do
     else
       worker = Enum.random(checked_out)
       PoolSup.checkin(context[:pid], worker)
-      %{context | checked_out: List.delete(checked_out, worker)} |> receive_msg_from_waiting_processes
+      %{context | checked_out: List.delete(checked_out, worker)} |> receive_msg_from_waiting_processes()
     end
   end
 
   def cmd_change_capacity(context, new_reserved, new_ondemand) do
     PoolSup.change_capacity(context[:pid], new_reserved, new_ondemand)
     %{context | reserved: new_reserved || context[:reserved], ondemand: new_ondemand || context[:ondemand]}
-    |> receive_msg_from_waiting_processes
+    |> receive_msg_from_waiting_processes()
   end
 
   def cmd_kill_running_worker(context) do
@@ -360,7 +360,7 @@ defmodule PoolSupTest do
     else
       worker = Enum.random(checked_out)
       kill_child(worker)
-      %{context | checked_out: List.delete(checked_out, worker)} |> receive_msg_from_waiting_processes
+      %{context | checked_out: List.delete(checked_out, worker)} |> receive_msg_from_waiting_processes()
     end
   end
 
