@@ -116,6 +116,15 @@ defmodule PoolSupTest do
     end)
   end
 
+  test "timeout in blocking checkout should not leak process" do
+    with_pool(fn pid ->
+      # On rare occasion checkout with timeout=0 succeeds; we try 5 times to make it exit
+      catch_exit Enum.each(1..5, fn _ -> PoolSup.checkout(pid, 0) end)
+      assert_receive({r, p} when is_reference(r) and is_pid(p))
+      assert PoolSup.status(pid)[:working] == 0
+    end)
+  end
+
   test "transaction/3 should correctly checkin child pid" do
     with_pool(1, 0, fn pid ->
       ensure_child_not_in_use = fn ->
@@ -195,6 +204,7 @@ defmodule PoolSupTest do
       cmd_checkout_nonblocking: [],
       cmd_checkout_or_catch:    [],
       cmd_checkout_wait:        [],
+      cmd_checkout_timeout:     [],
       cmd_checkin:              [],
       cmd_change_capacity:      [pick_capacity(), pick_capacity()],
       cmd_kill_running_worker:  [],
@@ -236,14 +246,15 @@ defmodule PoolSupTest do
 
   defp data_type_correct?(all, {working1, working2}, available, {waiting_queue, waiting_map}) do
     waiting_queue_list = :queue.to_list(waiting_queue)
-    Enum.all?([
+    [
       [Map.keys(all), Map.keys(working1), available] |> List.flatten() |> Enum.all?(&is_pid/1),
       Map.values(working1) |> Enum.all?(&is_reference/1),
       Enum.all?(waiting_queue_list, fn {{pid, ref}, cref} -> is_pid(pid) and is_reference(ref) and is_reference(cref) end),
       Enum.all?(waiting_map, fn {pid, {cref, mref}} -> is_pid(pid) and is_reference(cref) and is_reference(mref) end),
       working1 == Map.new(working2, fn {ref, pid} -> {pid, ref} end),
       MapSet.subset?(MapSet.new(waiting_map, fn {pid, _} -> pid end), MapSet.new(waiting_queue_list, fn {{pid, _}, _} -> pid end)),
-    ])
+    ]
+    |> Enum.all?()
   end
 
   defp all_corresponds_to_child_pids?(all, sup_state) do
@@ -333,6 +344,23 @@ defmodule PoolSupTest do
       pid = PoolSup.checkout(context[:pid], 1000)
       assert is_pid(pid)
       %{context | checked_out: [pid | checked_out]}
+    end
+  end
+
+  def cmd_checkout_timeout(context) do
+    try do
+      # On rare occastion checkout with timeout=0 succeeds; in that case we treat this cmd as a successful checkout
+      pid = PoolSup.checkout(context[:pid], 0)
+      assert is_pid(pid)
+      %{context | checked_out: [pid | context.checked_out]}
+    catch
+      :exit, {:timeout, _} ->
+        receive do
+          {r, p} when is_reference(r) and is_pid(p) -> :ok # reply
+        after
+          10 -> :ok # pool is full
+        end
+        context
     end
   end
 

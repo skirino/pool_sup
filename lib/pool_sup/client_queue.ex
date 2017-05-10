@@ -21,7 +21,7 @@ defmodule PoolSup.ClientQueue do
     {q2, m2}
   end
 
-  defun dequeue_and_demonitor({q1, m1} :: t) :: nil | {GenServer.from, t} do
+  defun dequeue_and_demonitor({q1, m1} :: t) :: nil | {GenServer.from, cancel_ref, t} do
     case :queue.out(q1) do
       {:empty                                 , _ } -> nil
       {{:value, {{pid, _} = from, cancel_ref}}, q2} ->
@@ -31,7 +31,7 @@ defmodule PoolSup.ClientQueue do
             dequeue_and_demonitor({q2, m1})
           {{^cancel_ref, monitor_ref}, m2} ->
             Process.demonitor(monitor_ref)
-            {from, {q2, m2}}
+            {from, cancel_ref, {q2, m2}}
           {_different_cancel_ref, m2} ->
             # the same client calls blocking checkout more than once; older entry has already been cancelled
             dequeue_and_demonitor({q2, m2})
