@@ -149,7 +149,7 @@ defmodule PoolSupTest do
       caller = spawn(fn ->
         PoolSup.transaction(pid, fn _ -> :timer.sleep(10_000) end)
       end)
-      :timer.sleep(1)
+      :timer.sleep(10)
       Process.exit(caller, :kill)
       child = PoolSup.checkout(pid) # block if something is wrong
       PoolSup.checkin(pid, child)
