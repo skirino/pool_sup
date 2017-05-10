@@ -34,6 +34,8 @@ defmodule PoolSup.MultiTest do
     table_id = :ets.new(:pool_sup_multi, [:set, :public, {:read_concurrency, true}])
     {:ok, pid} = Multi.start_link(table_id, @multi_id, 2, W, [], 1, 0, [name: :registered_name])
     assert Process.whereis(:registered_name) == pid
+    shutdown_pool_multi(pid, table_id)
+    assert Process.whereis(:registered_name) == nil
   end
 
   test "should behave as an ordinary supervisor" do
