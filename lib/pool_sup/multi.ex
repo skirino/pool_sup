@@ -332,17 +332,12 @@ defmodule PoolSup.Multi do
           new_terminating_pools = PidSet.delete(terminating_pools, pid)
           {:noreply, state(s, sup_state: new_sup_state, terminating_pools: new_terminating_pools)}
         else
-          s2 = delegate_info_message_to_supervisor_callback(msg, s)
+          s2 = H.delegate_info_message_to_supervisor_callback(msg, s)
           reset_pids_record(s2)
           {:noreply, s2}
         end
-      _ -> {:noreply, delegate_info_message_to_supervisor_callback(msg, s)}
+      _ -> {:noreply, H.delegate_info_message_to_supervisor_callback(msg, s)}
     end
-  end
-
-  defunp delegate_info_message_to_supervisor_callback(msg :: term, state(sup_state: sup_state) = s :: state) :: state do
-    {:noreply, new_sup_state} = :supervisor.handle_info(msg, sup_state)
-    state(s, sup_state: new_sup_state)
   end
 
   def terminate(reason, state(table_id: table_id, pool_multi_key: pool_multi_key) = s) do

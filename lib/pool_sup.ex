@@ -384,15 +384,14 @@ defmodule PoolSup do
     end
   end
 
-  def handle_info(msg, state(sup_state: sup_state) = s) do
-    {:noreply, new_sup_state} = :supervisor.handle_info(msg, sup_state)
-    s2 = state(s, sup_state: new_sup_state)
-    s3 = case msg do
-      {:EXIT, pid, _reason}                  -> handle_exit(s2, pid)
-      {:DOWN, _mref, :process, pid, _reason} -> cancel_client(s2, pid, nil)
-      _                                      -> s2
-    end
-    {:noreply, s3}
+  def handle_info(msg, s) do
+    s2 =
+      case msg do
+        {:DOWN, _mref, :process, pid, _reason} -> cancel_client(s, pid, nil)
+        {:EXIT, pid, _reason}                  -> H.delegate_info_message_to_supervisor_callback(msg, s) |> handle_exit(pid)
+        _                                      -> H.delegate_info_message_to_supervisor_callback(msg, s)
+      end
+    {:noreply, s2}
   end
 
   defunp handle_exit(state(all: all) = s :: state, pid :: pid) :: state do

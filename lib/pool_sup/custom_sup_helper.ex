@@ -66,4 +66,12 @@ defmodule PoolSup.CustomSupHelper do
     {:reply, :ok, new_sup_state} = :supervisor.handle_call({:terminate_child, pid}, nil, sup_state)
     new_sup_state
   end
+
+  defmacro delegate_info_message_to_supervisor_callback(msg, s) do
+    quote bind_quoted: [msg: msg, s: s] do
+      state(sup_state: sup_state) = s
+      {:noreply, new_sup_state} = :supervisor.handle_info(msg, sup_state)
+      state(s, sup_state: new_sup_state)
+    end
+  end
 end
