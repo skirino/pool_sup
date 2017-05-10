@@ -6,18 +6,18 @@ defmodule PoolSup.PidRefSet do
 
   defun new() :: t, do: {%{}, %{}}
 
-  defun size({m1, _} :: t) :: non_neg_integer, do: map_size(m1)
+  defun size({p2r, _} :: t) :: non_neg_integer, do: map_size(p2r)
 
-  defun member_pid?({m1, _ } :: t, pid :: pid      ) :: boolean, do: Map.has_key?(m1, pid)
+  defun member_pid?({p2r, _ } :: t, pid :: pid) :: boolean, do: Map.has_key?(p2r, pid)
 
-  defun put({m1, m2} :: t, pid :: pid, ref :: reference) :: t do
-    {Map.put(m1, pid, ref), Map.put(m2, ref, pid)}
+  defun put({p2r, r2p} :: t, pid :: pid, ref :: reference) :: t do
+    {Map.put(p2r, pid, ref), Map.put(r2p, ref, pid)}
   end
 
-  defun delete_by_pid({m1, m2} = t :: t, pid :: pid) :: t do
-    case Map.pop(m1, pid) do
-      {nil, _} -> t
-      {ref, m} -> {m, Map.delete(m2, ref)}
+  defun delete_by_pid({p2r, r2p} = t :: t, pid :: pid) :: t do
+    case Map.pop(p2r, pid) do
+      {nil, _   } -> t
+      {ref, p2r2} -> {p2r2, Map.delete(r2p, ref)}
     end
   end
 end
