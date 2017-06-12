@@ -156,6 +156,15 @@ defmodule PoolSupTest do
     end)
   end
 
+  test "killing worker in transaction/3 while a client is waiting should not result in reply of dead worker pid" do
+    with_pool(2, 0, fn pid ->
+      spawn(fn -> PoolSup.transaction(pid, fn w -> :timer.sleep(100); Process.exit(w, :kill) end) end)
+      spawn(fn -> PoolSup.transaction(pid, fn w -> :timer.sleep(100); Process.exit(w, :kill) end) end)
+      :timer.sleep(50)
+      assert Process.alive?(PoolSup.checkout(pid))
+    end)
+  end
+
   test "should spawn ondemand processes when no available worker exists" do
     with_pool(1, 1, fn pid ->
       assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}

@@ -165,7 +165,9 @@ defmodule PoolSup do
   Checks in an in-use worker pid and make it available to others.
   """
   defun checkin(pool :: pool, pid :: g[pid]) :: :ok do
-    GenServer.cast(pool, {:checkin, pid})
+    # Don't checkin dead pid (especially in case of `transaction/3`, where execution of `f` may kill the worker).
+    if Process.alive?(pid), do: GenServer.cast(pool, {:checkin, pid})
+    :ok
   end
 
   @doc """

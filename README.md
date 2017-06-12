@@ -13,7 +13,7 @@
 - Process defined by this module behaves as a `:simple_one_for_one` supervisor.
 - Worker processes are spawned using a callback module that implements `PoolSup.Worker` behaviour.
 - `PoolSup` process manages which worker processes are in use and which are not.
-- `PoolSup` automatically restart crashed workers.
+- `PoolSup` automatically restarts crashed workers.
 - Functions to request pid of an available worker process: `checkout/2`, `checkout_nonblocking/2`.
 - Run-time configuration of pool size: `change_capacity/3`.
 - Load-balancing using multiple pools: `PoolSup.Multi`.
