@@ -3,13 +3,13 @@ defmodule PoolSup.Mixfile do
 
   @github_url "https://github.com/skirino/pool_sup"
 
-  def project do
+  def project() do
     [
       app:             :pool_sup,
       version:         "0.3.1",
-      elixir:          "~> 1.2",
-      build_embedded:  Mix.env == :prod,
-      start_permanent: Mix.env == :prod,
+      elixir:          "~> 1.4",
+      build_embedded:  Mix.env() == :prod,
+      start_permanent: Mix.env() == :prod,
       deps:            deps(),
       description:     "A supervisor specialized to manage pool of workers",
       package:         package(),
@@ -25,7 +25,7 @@ defmodule PoolSup.Mixfile do
 
   defp deps() do
     [
-      {:croma  , "~> 0.4"},
+      {:croma  , "~> 0.6"},
       {:dialyze, "~> 0.2" , only: :dev},
       {:ex_doc , "~> 0.15", only: :dev},
       {:coverex, "~> 1.4" , only: :test},

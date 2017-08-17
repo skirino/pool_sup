@@ -85,7 +85,7 @@ defmodule CustomSupTest do
 
   defp otp_version do
     otp_version_path = Path.join([:code.root_dir, "releases", :erlang.system_info(:otp_release), "OTP_VERSION"])
-    case File.read!(otp_version_path) |> String.rstrip |> String.split(".") |> Enum.map(&String.to_integer/1) do
+    case File.read!(otp_version_path) |> String.trim_trailing() |> String.split(".") |> Enum.map(&String.to_integer/1) do
       [major, minor]        -> {major, minor, 0    }
       [major, minor, patch] -> {major, minor, patch}
     end
