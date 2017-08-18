@@ -25,7 +25,7 @@ defmodule PoolSup.Mixfile do
 
   defp deps() do
     [
-      {:croma  , "~> 0.6"},
+      {:croma  , "~> 0.7"},
       {:dialyze, "~> 0.2" , only: :dev},
       {:ex_doc , "~> 0.15", only: :dev},
       {:coverex, "~> 1.4" , only: :test},
