@@ -8,7 +8,7 @@ defmodule PoolSup.CustomSupHelper do
   #
   # common gen_server callbacks
   #
-  defmacro handle_call_default_clauses do
+  defmacro handle_call_default_clauses() do
     quote do
       # we don't support start_child/terminate_child operation; interrupt those messages here
       def handle_call({:start_child, _}, _from, s) do
@@ -24,7 +24,7 @@ defmodule PoolSup.CustomSupHelper do
     end
   end
 
-  defmacro code_change_default_clause do
+  defmacro code_change_default_clause() do
     quote do
       def code_change(old_vsn, state(sup_state: sup_state) = s, extra) do
         case :supervisor.code_change(old_vsn, sup_state, extra) do

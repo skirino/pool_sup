@@ -77,7 +77,7 @@ defmodule PoolSup do
     catch
       :exit, {:timeout, _} = reason ->
         GenServer.cast(pool, {:cancel_waiting, self(), cancel_ref})
-        :erlang.raise(:exit, reason, :erlang.get_stacktrace)
+        :erlang.raise(:exit, reason, :erlang.get_stacktrace())
     end
   end
 
