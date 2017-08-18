@@ -161,12 +161,11 @@ defmodule PoolSup do
 
   def handle_call(:checkout_nonblocking, {_, ref},
                   state(reserved: reserved, ondemand: ondemand, all: all, available: available) = s) do
-    # In nonblocking checkout we use `ref` in `from` tuple (as microoptimization to avoid creating new one),
+    # In nonblocking checkout we use `ref` in `from` tuple (as a micro-optimization to avoid creating new one),
     # since in this case no cancellation would ever happen later and thus any reference would be OK.
     case available do
-      [pid | pids] ->
-        reply_with_available_worker(pid, pids, ref, s)
-      [] ->
+      [pid | pids] -> reply_with_available_worker(pid, pids, ref, s)
+      []           ->
         if map_size(all) < reserved + ondemand do
           reply_with_ondemand_worker(s, ref)
         else
@@ -211,11 +210,13 @@ defmodule PoolSup do
   end
 
   def handle_cast({:checkin, pid}, state(working: working) = s) do
-    if PidRefSet.member_pid?(working, pid) do
-      {:noreply, handle_worker_checkin(s, pid)}
-    else
-      {:noreply, s}
-    end
+    s2 =
+      if PidRefSet.member_pid?(working, pid) do
+        handle_worker_checkin(s, pid)
+      else
+        s
+      end
+    {:noreply, s2}
   end
   def handle_cast({:cancel_waiting, pid, cancel_ref}, state(working: working) = s) do
     s2 =
