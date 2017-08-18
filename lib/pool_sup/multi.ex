@@ -5,7 +5,7 @@ defmodule PoolSup.Multi do
   Defines a supervisor that is specialized to manage multiple `PoolSup` processes.
 
   For high-throughput use cases, centralized process pool such as `PoolSup`
-  may become a bottleneck as all the messages must be handled by the pool manager process.
+  may become a bottleneck as all tasks must checkout from a single pool manager process.
   This module is for these situations: to manage multiple `PoolSup`s and
   load-balance checkout requests to multiple pool manager processes.
 

@@ -1,6 +1,6 @@
 # PoolSup: Yet another process pool library in [Elixir](http://elixir-lang.org/)
 
-`PoolSup` defines a supervisor which is specialized to manage pool of worker processes.
+`PoolSup` defines a supervisor specialized to manage pool of worker processes.
 - [API Documentation](http://hexdocs.pm/pool_sup/)
 - [Hex package information](https://hex.pm/packages/pool_sup)
 
