@@ -10,6 +10,8 @@ defmodule PoolSupTest do
 
   defp shutdown_pool(pool) do
     childs = Supervisor.which_children(pool) |> Enum.map(fn {_, pid, _, _} -> pid end)
+    {:links, linked_pids} = Process.info(pool, :links)
+    assert Enum.sort(linked_pids) == Enum.sort([self() | childs])
     Supervisor.stop(pool)
     :timer.sleep(1)
     refute Process.alive?(pool)
@@ -196,7 +198,7 @@ defmodule PoolSupTest do
           new_context
         end)
       end)
-      IO.write(IO.ANSI.green <> "." <> IO.ANSI.reset)
+      IO.write(IO.ANSI.green() <> "." <> IO.ANSI.reset())
     end)
   end
 
