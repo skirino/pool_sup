@@ -118,7 +118,7 @@ defmodule PoolSupTest do
     end)
   end
 
-  test "timeout in blocking checkout should not leak process" do
+  test "timeout in blocking checkout with reply should not leak any process" do
     with_pool(fn pid ->
       # On rare occasion checkout with timeout=0 succeeds; we try 5 times to make it exit
       catch_exit Enum.each(1..5, fn _ -> PoolSup.checkout(pid, 0) end)
@@ -160,10 +160,15 @@ defmodule PoolSupTest do
 
   test "killing worker in transaction/3 while a client is waiting should not result in reply of dead worker pid" do
     with_pool(2, 0, fn pid ->
-      spawn(fn -> PoolSup.transaction(pid, fn w -> :timer.sleep(100); Process.exit(w, :kill) end) end)
-      spawn(fn -> PoolSup.transaction(pid, fn w -> :timer.sleep(100); Process.exit(w, :kill) end) end)
-      :timer.sleep(50)
-      assert Process.alive?(PoolSup.checkout(pid))
+      [
+        spawn(fn -> PoolSup.transaction(pid, fn w -> GenServer.stop(w)      end) end),
+        spawn(fn -> PoolSup.transaction(pid, fn w -> Process.exit(w, :kill) end) end),
+      ]
+      |> Enum.each(fn p ->
+        mref = Process.monitor(p)
+        assert_receive({:DOWN, ^mref, :process, ^p, _reason})
+      end)
+      assert PoolSup.status(pid) == %{reserved: 2, ondemand: 0, children: 2, working: 0, available: 2}
     end)
   end
 

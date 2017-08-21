@@ -15,7 +15,7 @@ defmodule PoolSup.ClientQueue do
     monitor_ref =
       case Map.get(m1, pid) do
         nil                                -> Process.monitor(pid)
-        {_old_cancel_ref, old_monitor_ref} -> old_monitor_ref # cancel the previous entry; reuse the already created monitor
+        {_old_cancel_ref, old_monitor_ref} -> old_monitor_ref # reuse the already created monitor; the previous entry is cancelled by setting the new `cancel_ref`
       end
     m2 = Map.put(m1, pid, {cancel_ref, monitor_ref})
     {q2, m2}
