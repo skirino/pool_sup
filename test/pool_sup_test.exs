@@ -66,7 +66,7 @@ defmodule PoolSupTest do
 
   test "should checkout/checkin children" do
     with_pool(fn pid ->
-      {:state, _, _, _, _, _, children, _} = :sys.get_state(pid)
+      {:state, _, _, _, _, _, children, _, _, _} = :sys.get_state(pid)
       [child1, _child2, _child3] = children
       assert Enum.all?(children, &Process.alive?/1)
 
@@ -101,9 +101,9 @@ defmodule PoolSupTest do
 
       # `waiting` queue should be restored when blocking checkout failed
       :timer.sleep(1)
-      {:state, a, b, c, d, e, f, {_waiting_queue, waiting_map}} = :sys.get_state(pid)
+      {:state, a, b, c, d, e, f, {_waiting_queue, waiting_map}, _, _} = :sys.get_state(pid)
       catch_exit PoolSup.checkout(pid, 10)
-      {:state, ^a, ^b, ^c, ^d, ^e, ^f, {_, ^waiting_map}} = :sys.get_state(pid)
+      {:state, ^a, ^b, ^c, ^d, ^e, ^f, {_, ^waiting_map}, _, _} = :sys.get_state(pid)
 
       # waiting clients should receive pids when available
       PoolSup.checkin(pid, worker2)
@@ -236,7 +236,7 @@ defmodule PoolSupTest do
   end
 
   defp assert_invariants_hold(pid, context, state_before) do
-    {:state, sup_state, reserved, ondemand, all, working, available, waiting} = state_after = :sys.get_state(pid)
+    {:state, sup_state, reserved, ondemand, all, working, available, waiting, _, _} = state_after = :sys.get_state(pid)
     try do
       assert reserved == context[:reserved]
       assert map_size(all) >= reserved
@@ -264,10 +264,10 @@ defmodule PoolSupTest do
     waiting_queue_list = :queue.to_list(waiting_queue)
     [
       [Map.keys(all), Map.keys(working1), available] |> List.flatten() |> Enum.all?(&is_pid/1),
-      Map.values(working1) |> Enum.all?(&is_reference/1),
+      Map.values(working1) |> Enum.all?(fn {ref, term} -> is_reference(ref) and is_integer(term) end),
       Enum.all?(waiting_queue_list, fn {{pid, ref}, cref} -> is_pid(pid) and is_reference(ref) and is_reference(cref) end),
       Enum.all?(waiting_map, fn {pid, {cref, mref}} -> is_pid(pid) and is_reference(cref) and is_reference(mref) end),
-      working1 == Map.new(working2, fn {ref, pid} -> {pid, ref} end),
+      Map.new(working1, fn {pid, {ref, _}} -> {pid, ref} end) == Map.new(working2, fn {ref, pid} -> {pid, ref} end),
       MapSet.subset?(MapSet.new(waiting_map, fn {pid, _} -> pid end), MapSet.new(waiting_queue_list, fn {{pid, _}, _} -> pid end)),
     ]
     |> Enum.all?()
@@ -409,7 +409,7 @@ defmodule PoolSupTest do
   end
 
   def cmd_kill_idle_worker(context) do
-    {:state, _, _, _, all, {working, _}, _, _} = :sys.get_state(context[:pid])
+    {:state, _, _, _, all, {working, _}, _, _, _, _} = :sys.get_state(context[:pid])
     idle_workers = Map.keys(all) -- Map.keys(working)
     if !Enum.empty?(idle_workers) do
       worker = Enum.random(idle_workers)

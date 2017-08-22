@@ -11,7 +11,7 @@ defmodule PoolSup do
   require H
 
   @type  pool      :: pid | GS.name
-  @type  options   :: [name: GS.name]
+  @type  option    :: {:name, GS.name} | {:checkout_max_duration, pos_integer}
   @typep sup_state :: H.sup_state
 
   require Record
@@ -23,15 +23,19 @@ defmodule PoolSup do
     :working,
     :available,
     :waiting,
+    :checkout_max_duration,
+    :current_term,
   ]
   @typep state :: record(:state,
-    sup_state: sup_state,
-    reserved:  non_neg_integer,
-    ondemand:  non_neg_integer,
-    all:       PidSet.t,
-    working:   PidRefSet.t,
-    available: [pid],
-    waiting:   ClientQueue.t,
+    sup_state:             sup_state,
+    reserved:              non_neg_integer,
+    ondemand:              non_neg_integer,
+    all:                   PidSet.t,
+    working:               PidRefSet.t,
+    available:             [pid],
+    waiting:               ClientQueue.t,
+    checkout_max_duration: nil | pos_integer,
+    current_term:          non_neg_integer,
   )
 
   #
@@ -52,7 +56,7 @@ defmodule PoolSup do
                    worker_init_arg :: term,
                    reserved        :: g[non_neg_integer],
                    ondemand        :: g[non_neg_integer],
-                   options         :: options \\ []) :: GS.on_start do
+                   options         :: g[[option]] \\ []) :: GS.on_start do
     GS.start_link(__MODULE__, {worker_module, worker_init_arg, reserved, ondemand, options}, H.gen_server_opts(options))
   end
 
@@ -77,7 +81,7 @@ defmodule PoolSup do
     catch
       :exit, {:timeout, _} = reason ->
         GenServer.cast(pool, {:cancel_waiting, self(), cancel_ref})
-        :erlang.raise(:exit, reason, :erlang.get_stacktrace())
+        :erlang.raise(:exit, reason, System.stacktrace())
     end
   end
 
@@ -148,8 +152,17 @@ defmodule PoolSup do
   #
   def init({mod, init_arg, reserved, ondemand, opts}) do
     {:ok, sup_state} = :supervisor.init(supervisor_init_arg(mod, init_arg, opts))
-    s = state(sup_state: sup_state, reserved: reserved, ondemand: ondemand, all: PidSet.new(), working: PidRefSet.new(), available: [], waiting: ClientQueue.new())
-    {:ok, restock_children_upto_reserved(s)}
+    duration =
+      case opts[:checkout_max_duration] do
+        nil                            -> nil
+        d when is_integer(d) and d > 0 -> start_term_increment_timer(d); d
+      end
+    s =
+      state(sup_state: sup_state, reserved: reserved, ondemand: ondemand,
+            all: PidSet.new(), working: PidRefSet.new(), available: [], waiting: ClientQueue.new(),
+            checkout_max_duration: duration, current_term: 0)
+      |> restock_children_upto_reserved()
+    {:ok, s}
   end
 
   defp supervisor_init_arg(mod, init_arg, opts) do
@@ -199,13 +212,13 @@ defmodule PoolSup do
 
   H.handle_call_default_clauses
 
-  defunp reply_with_available_worker(pid :: pid, pids :: [pid], cancel_ref :: reference, state(working: working) = s :: state) :: {:reply, pid, state} do
-    {:reply, pid, state(s, working: PidRefSet.put(working, pid, cancel_ref), available: pids)}
+  defunp reply_with_available_worker(pid :: pid, pids :: [pid], cancel_ref :: reference, state(working: working, current_term: term) = s :: state) :: {:reply, pid, state} do
+    {:reply, pid, state(s, working: PidRefSet.put(working, pid, cancel_ref, term), available: pids)}
   end
 
-  defunp reply_with_ondemand_worker(state(sup_state: sup_state, all: all, working: working) = s :: state, cancel_ref :: reference) :: {:reply, pid, state} do
+  defunp reply_with_ondemand_worker(state(sup_state: sup_state, all: all, working: working, current_term: term) = s :: state, cancel_ref :: reference) :: {:reply, pid, state} do
     {new_child_pid, new_sup_state} = H.start_child(sup_state)
-    s2 = state(s, sup_state: new_sup_state, all: PidSet.put(all, new_child_pid), working: PidRefSet.put(working, new_child_pid, cancel_ref))
+    s2 = state(s, sup_state: new_sup_state, all: PidSet.put(all, new_child_pid), working: PidRefSet.put(working, new_child_pid, cancel_ref, term))
     {:reply, new_child_pid, s2}
   end
 
@@ -265,12 +278,12 @@ defmodule PoolSup do
     state(s, sup_state: H.terminate_child(pid, sup_state), all: PidSet.delete(all, pid), working: PidRefSet.delete_by_pid(working, pid))
   end
 
-  defunp send_reply_with_checked_in_child(state(working: working) = s :: state,
+  defunp send_reply_with_checked_in_child(state(working: working, current_term: term) = s :: state,
                                           from       :: GenServer.from,
                                           cancel_ref :: reference,
                                           pid        :: pid) :: state do
     GenServer.reply(from, pid)
-    state(s, working: PidRefSet.put(working, pid, cancel_ref))
+    state(s, working: PidRefSet.put(working, pid, cancel_ref, term))
   end
 
   defunp handle_capacity_change(state(available: available) = s :: state) :: state do
@@ -317,6 +330,7 @@ defmodule PoolSup do
   def handle_info(msg, s) do
     s2 =
       case msg do
+        :increment_term                        -> handle_increment_term(s)
         {:DOWN, _mref, :process, pid, _reason} -> cancel_client(s, pid, nil)
         {:EXIT, pid, _reason}                  -> H.delegate_info_message_to_supervisor_callback(msg, s) |> handle_exit(pid)
         _                                      -> H.delegate_info_message_to_supervisor_callback(msg, s)
@@ -362,12 +376,12 @@ defmodule PoolSup do
     end
   end
 
-  defunp send_reply_with_new_child(state(sup_state: sup_state, all: all, working: working) = s :: state,
+  defunp send_reply_with_new_child(state(sup_state: sup_state, all: all, working: working, current_term: term) = s :: state,
                                    from       :: GenServer.from,
                                    cancel_ref :: reference) :: state do
     {pid, new_sup_state} = H.start_child(sup_state)
     GenServer.reply(from, pid)
-    state(s, sup_state: new_sup_state, all: PidSet.put(all, pid), working: PidRefSet.put(working, pid, cancel_ref))
+    state(s, sup_state: new_sup_state, all: PidSet.put(all, pid), working: PidRefSet.put(working, pid, cancel_ref, term))
   end
 
   defunp restock_child(state(sup_state: sup_state, all: all, available: available) = s :: state) :: state do
@@ -388,6 +402,21 @@ defmodule PoolSup do
 
   defunp cancel_client(state(waiting: waiting) = s :: state, pid :: pid, cancel_ref_or_nil :: nil | reference) :: state do
     state(s, waiting: ClientQueue.cancel(waiting, pid, cancel_ref_or_nil))
+  end
+
+  defunp handle_increment_term(state(working: working, checkout_max_duration: dur, current_term: term) = s :: state) :: state do
+    case dur do
+      nil -> :ok # if `dur == nil`, periodic cleanup of too-long-running workers has been disabled
+      _   ->
+        PidRefSet.kill_workers_checked_out_too_long(working, term)
+        start_term_increment_timer(dur)
+    end
+    state(s, current_term: term + 1)
+  end
+
+  defunp start_term_increment_timer(duration_seconds :: pos_integer) :: :ok do
+    :erlang.send_after(duration_seconds * 1000, self(), :increment_term)
+    :ok
   end
 
   H.code_change_default_clause
