@@ -4,10 +4,10 @@ defmodule PoolSup.MultiTest do
 
   @multi_id "some_pool_multi_id"
 
-  defp with_multi(n_pools \\ 3, reserved \\ 4, ondemand \\ 1, f) do
+  defp with_multi(n_pools \\ 3, reserved \\ 4, ondemand \\ 1, options \\ [], f) do
     table_id = :ets.new(:pool_sup_multi, [:set, :public, {:read_concurrency, true}])
     try do
-      {:ok, pid} = Multi.start_link(table_id, @multi_id, n_pools, W, [], reserved, ondemand)
+      {:ok, pid} = Multi.start_link(table_id, @multi_id, n_pools, W, [], reserved, ondemand, options)
       f.(table_id, pid)
       shutdown_pool_multi(pid, table_id)
     after
@@ -243,6 +243,29 @@ defmodule PoolSup.MultiTest do
 
       assert Process.alive?(worker1) != Process.alive?(worker2)
       assert child_pids(pid) == [pool_to_keep]
+    end)
+  end
+
+  test "should properly pass :checkout_max_duration option to child pools" do
+    with_multi(2, 2, 0, [checkout_max_duration: 1], fn(_table_id, pid) ->
+      [pool1, pool2] = child_pids(pid)
+      assert PoolSup.status(pool1).checkout_max_duration == 1
+      assert PoolSup.status(pool2).checkout_max_duration == 1
+
+      Multi.change_checkout_max_duration(pid, 2)
+      :timer.sleep(1)
+      assert PoolSup.status(pool1).checkout_max_duration == 2
+      assert PoolSup.status(pool2).checkout_max_duration == 2
+
+      Multi.change_checkout_max_duration(pid, nil)
+      :timer.sleep(1)
+      assert PoolSup.status(pool1).checkout_max_duration == nil
+      assert PoolSup.status(pool2).checkout_max_duration == nil
+
+      Multi.change_configuration(pid, 3, nil, nil)
+      :timer.sleep(1)
+      [pool3] = child_pids(pid) -- [pool1, pool2]
+      assert PoolSup.status(pool3).checkout_max_duration == nil
     end)
   end
 end

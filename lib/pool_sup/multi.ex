@@ -56,7 +56,7 @@ defmodule PoolSup.Multi do
   @type  pool_multi     :: pid | GS.name
   @type  pool_multi_key :: term
   @type  pool_sup_args  :: [module | term | non_neg_integer | non_neg_integer]
-  @type  options        :: [name: GS.name]
+  @type  option         :: {:name, GS.name} | {:checkout_max_duration, pos_integer}
   @typep sup_state      :: H.sup_state
 
   require Record
@@ -67,14 +67,16 @@ defmodule PoolSup.Multi do
     :terminating_pools,
     :reserved,
     :ondemand,
+    :checkout_max_duration,
   ]
   @typep state :: record(:state,
-    sup_state:         term,
-    table_id:          :ets.tab,
-    pool_multi_key:    pool_multi_key,
-    terminating_pools: PidSet.t,
-    reserved:          non_neg_integer,
-    ondemand:          non_neg_integer,
+    sup_state:             term,
+    table_id:              :ets.tab,
+    pool_multi_key:        pool_multi_key,
+    terminating_pools:     PidSet.t,
+    reserved:              non_neg_integer,
+    ondemand:              non_neg_integer,
+    checkout_max_duration: nil | pos_integer,
   )
 
   @termination_progress_check_interval (if Mix.env == :test, do: 10, else: 60_000)
@@ -96,7 +98,9 @@ defmodule PoolSup.Multi do
   - `worker_init_arg`: Value passed to `worker_module.start_link/1`.
   - `reserved`: Number of reserved workers in each `PoolSup`.
   - `ondemand`: Number of ondemand workers in each `PoolSup`.
-  - `options`: Currently only `:name` option for name registration is supported.
+  - `options`: Keyword list of the following options:
+      - `:name`: Used for name registration of `PoolSup.Multi` process.
+      - `:checkout_max_duration`: An option passed to child pools. See `PoolSup.start_link/5` for detail.
   """
   defun start_link(table_id        :: :ets.tab,
                    pool_multi_key  :: pool_multi_key,
@@ -105,7 +109,7 @@ defmodule PoolSup.Multi do
                    worker_init_arg :: term,
                    reserved        :: g[non_neg_integer],
                    ondemand        :: g[non_neg_integer],
-                   options         :: options \\ []) :: GS.on_start do
+                   options         :: g[[option]] \\ []) :: GS.on_start do
     init_arg = {table_id, pool_multi_key, n_pools, worker_module, worker_init_arg, reserved, ondemand, options}
     GS.start_link(__MODULE__, init_arg, H.gen_server_opts(options))
   end
@@ -195,7 +199,7 @@ defmodule PoolSup.Multi do
   ## Changing `reserved` and/or `ondemand` of each pool
 
   - The given values of `reserved`, `ondemand` are notified to all the working pools.
-  See `PoolSup.change_capacity/3` for the behaviour of each pool.
+    See `PoolSup.change_capacity/3` for the behaviour of each pool.
   """
   defun change_configuration(pid_or_name  :: pool_multi,
                              new_n_pools  :: nil_or_nni,
@@ -206,18 +210,39 @@ defmodule PoolSup.Multi do
       GenServer.cast(pid_or_name, {:change_configuration, n, r, o})
   end
 
+  @doc """
+  Changes `:checkout_max_duration` option of child pools.
+
+  See `PoolSup.start_link/5` for detailed explanation of `:checkout_max_duration` option.
+  The change will be broadcasted to all existing pools.
+  Also all pools that start afterward will use the new value of `:checkout_max_duration`.
+  """
+  defun change_checkout_max_duration(pid_or_name :: pool_multi, new_duration :: nil | pos_integer) :: :ok do
+    case new_duration do
+      nil                            -> :ok
+      d when is_integer(d) and d > 0 -> :ok
+    end
+    GenServer.cast(pid_or_name, {:change_checkout_max_duration, new_duration})
+  end
+
   #
   # gen_server callbacks
   #
   def init({table_id, pool_multi_key, n_pools, worker_module, worker_init_arg, reserved, ondemand, opts}) do
     {:ok, sup_state0} = :supervisor.init(supervisor_init_arg(worker_module, worker_init_arg, opts))
-    sup_state = spawn_pools(sup_state0, n_pools, reserved, ondemand)
-    s = state(sup_state:         sup_state,
-              table_id:          table_id,
-              pool_multi_key:    pool_multi_key,
-              terminating_pools: PidSet.new,
-              reserved:          reserved,
-              ondemand:          ondemand)
+    dur =
+      case opts[:checkout_max_duration] do
+        nil -> nil
+        d when is_integer(d) and d > 0 -> d
+      end
+    sup_state = spawn_pools(sup_state0, n_pools, reserved, ondemand, dur)
+    s = state(sup_state:             sup_state,
+              table_id:              table_id,
+              pool_multi_key:        pool_multi_key,
+              terminating_pools:     PidSet.new(),
+              reserved:              reserved,
+              ondemand:              ondemand,
+              checkout_max_duration: dur)
     reset_pids_record(s)
     {:ok, s}
   end
@@ -229,12 +254,16 @@ defmodule PoolSup.Multi do
     {sup_name, PoolSup.Callback, [spec]}
   end
 
-  defunp spawn_pools(sup_state :: sup_state, pools_to_add :: non_neg_integer, reserved :: non_neg_integer, ondemand :: non_neg_integer) :: sup_state do
+  defunp spawn_pools(sup_state    :: sup_state,
+                     pools_to_add :: non_neg_integer,
+                     reserved     :: non_neg_integer,
+                     ondemand     :: non_neg_integer,
+                     max_duration :: nil | pos_integer) :: sup_state do
     if pools_to_add == 0 do
       sup_state
     else
-      {_pid, new_sup_state} = H.start_child(sup_state, [reserved, ondemand])
-      spawn_pools(new_sup_state, pools_to_add - 1, reserved, ondemand)
+      {_pid, new_sup_state} = H.start_child(sup_state, [reserved, ondemand, [checkout_max_duration: max_duration]])
+      spawn_pools(new_sup_state, pools_to_add - 1, reserved, ondemand, max_duration)
     end
   end
 
@@ -268,11 +297,19 @@ defmodule PoolSup.Multi do
     change_capacity_of_pools(s3, pool_pids)
     {:noreply, s3}
   end
+  def handle_cast({:change_checkout_max_duration, dur}, state(sup_state: sup_state) = s) do
+    extract_child_pids(sup_state)
+    |> Enum.each(fn pool ->
+      PoolSup.change_checkout_max_duration(pool, dur)
+    end)
+    {:noreply, state(s, checkout_max_duration: dur)}
+  end
 
-  defunp adjust_number_of_pools(state(sup_state:         sup_state,
-                                      terminating_pools: terminating_pools,
-                                      reserved:          reserved,
-                                      ondemand:          ondemand) = s :: state,
+  defunp adjust_number_of_pools(state(sup_state:             sup_state,
+                                      terminating_pools:     terminating_pools,
+                                      reserved:              reserved,
+                                      ondemand:              ondemand,
+                                      checkout_max_duration: dur) = s :: state,
                                 n_pools :: non_neg_integer,
                                 pool_pids :: [pid]) :: state do
     working_pools = Enum.reject(pool_pids, &PidSet.member?(terminating_pools, &1))
@@ -280,7 +317,7 @@ defmodule PoolSup.Multi do
     cond do
       len == n_pools -> s
       len <  n_pools ->
-        new_sup_state = spawn_pools(sup_state, n_pools - len, reserved, ondemand)
+        new_sup_state = spawn_pools(sup_state, n_pools - len, reserved, ondemand, dur)
         s2 = state(s, sup_state: new_sup_state)
         reset_pids_record(s2)
         s2
