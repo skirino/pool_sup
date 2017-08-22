@@ -4,7 +4,7 @@ defmodule PoolSup.PidRefSet do
   @moduledoc false
 
   @type term_number :: non_neg_integer
-  @type t           :: {%{pid => {reference, term}}, %{reference => pid}}
+  @type t           :: {%{pid => {reference, term_number}}, %{reference => pid}}
 
   defun new() :: t, do: {%{}, %{}}
 
