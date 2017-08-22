@@ -108,8 +108,8 @@ defmodule PoolSup.MultiTest do
         end)
         |> Enum.reject(&is_nil/1)
       assert length(results) == 12
-      assert Enum.map(results, fn {p, _} -> p end) |> Enum.sort == List.duplicate(children, 4) |> List.flatten |> Enum.sort
-      assert Enum.map(results, fn {_, w} -> w end) |> Enum.sort == Enum.sort(grand_children)
+      assert Enum.map(results, fn {p, _} -> p end) |> Enum.sort() == List.duplicate(children, 4) |> List.flatten() |> Enum.sort()
+      assert Enum.map(results, fn {_, w} -> w end) |> Enum.sort() == Enum.sort(grand_children)
     end)
   end
 
@@ -147,12 +147,12 @@ defmodule PoolSup.MultiTest do
   test "should correctly reset capacity of child pools" do
     with_multi(2, 1, 0, fn(_table_id, pid) ->
       [pool1, pool2] = child_pids(pid)
-      assert PoolSup.status(pool1) == %{reserved: 1, ondemand: 0, children: 1, available: 1, working: 0}
-      assert PoolSup.status(pool2) == %{reserved: 1, ondemand: 0, children: 1, available: 1, working: 0}
+      assert PoolSup.status(pool1) == %{reserved: 1, ondemand: 0, children: 1, available: 1, working: 0, checkout_max_duration: nil}
+      assert PoolSup.status(pool2) == %{reserved: 1, ondemand: 0, children: 1, available: 1, working: 0, checkout_max_duration: nil}
       Multi.change_configuration(pid, nil, 2, 1)
       :timer.sleep(1)
-      assert PoolSup.status(pool1) == %{reserved: 2, ondemand: 1, children: 2, available: 2, working: 0}
-      assert PoolSup.status(pool2) == %{reserved: 2, ondemand: 1, children: 2, available: 2, working: 0}
+      assert PoolSup.status(pool1) == %{reserved: 2, ondemand: 1, children: 2, available: 2, working: 0, checkout_max_duration: nil}
+      assert PoolSup.status(pool2) == %{reserved: 2, ondemand: 1, children: 2, available: 2, working: 0, checkout_max_duration: nil}
     end)
   end
 
@@ -164,10 +164,10 @@ defmodule PoolSup.MultiTest do
 
       Multi.change_configuration(pid, 2, 0, 1)
       :timer.sleep(1)
-      [pool1, pool2] = child_pids(pid) |> Enum.sort
-      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list |> Enum.sort == [pool1, pool2]
-      assert PoolSup.status(pool1) == %{reserved: 0, ondemand: 1, children: 0, available: 0, working: 0}
-      assert PoolSup.status(pool2) == %{reserved: 0, ondemand: 1, children: 0, available: 0, working: 0}
+      [pool1, pool2] = child_pids(pid) |> Enum.sort()
+      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list() |> Enum.sort() == [pool1, pool2]
+      assert PoolSup.status(pool1) == %{reserved: 0, ondemand: 1, children: 0, available: 0, working: 0, checkout_max_duration: nil}
+      assert PoolSup.status(pool2) == %{reserved: 0, ondemand: 1, children: 0, available: 0, working: 0, checkout_max_duration: nil}
       worker1 = PoolSup.checkout(pool1)
       worker2 = PoolSup.checkout(pool2)
 
@@ -213,23 +213,23 @@ defmodule PoolSup.MultiTest do
 
   test "should handle death of working pool" do
     with_multi(2, 1, 0, fn(table_id, pid) ->
-      [pool1, pool2] = child_pids(pid) |> Enum.sort
-      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list |> Enum.sort == [pool1, pool2]
+      [pool1, pool2] = child_pids(pid) |> Enum.sort()
+      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list() |> Enum.sort() == [pool1, pool2]
       Supervisor.stop(pool1)
       Supervisor.stop(pool2)
       :timer.sleep(10)
 
       child_pids(pid)
-      [pool3, pool4] = child_pids(pid) |> Enum.sort
+      [pool3, pool4] = child_pids(pid) |> Enum.sort()
       refute pool1 in [pool3, pool4]
-      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list |> Enum.sort == [pool3, pool4]
+      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list() |> Enum.sort() == [pool3, pool4]
     end)
   end
 
   test "should handle death of pool that is being terminated" do
     with_multi(2, 1, 0, fn(table_id, pid) ->
-      [pool1, pool2] = child_pids(pid) |> Enum.sort
-      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list |> Enum.sort == [pool1, pool2]
+      [pool1, pool2] = child_pids(pid) |> Enum.sort()
+      assert :ets.lookup_element(table_id, @multi_id, 2) |> Tuple.to_list() |> Enum.sort() == [pool1, pool2]
       worker1 = PoolSup.checkout(pool1)
       worker2 = PoolSup.checkout(pool2)
 

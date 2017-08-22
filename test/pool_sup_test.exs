@@ -71,11 +71,11 @@ defmodule PoolSupTest do
       assert Enum.all?(children, &Process.alive?/1)
 
       # checkin not-working pid => no effect
-      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
+      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0, checkout_max_duration: nil}
       PoolSup.checkin(pid, self())
-      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
+      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0, checkout_max_duration: nil}
       PoolSup.checkin(pid, child1)
-      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0}
+      assert PoolSup.status(pid) == %{reserved: 3, ondemand: 0, children: 3, available: 3, working: 0, checkout_max_duration: nil}
 
       # nonblocking checkout
       worker1 = PoolSup.checkout_nonblocking(pid)
@@ -168,24 +168,24 @@ defmodule PoolSupTest do
         mref = Process.monitor(p)
         assert_receive({:DOWN, ^mref, :process, ^p, _reason})
       end)
-      assert PoolSup.status(pid) == %{reserved: 2, ondemand: 0, children: 2, working: 0, available: 2}
+      assert PoolSup.status(pid) == %{reserved: 2, ondemand: 0, children: 2, working: 0, available: 2, checkout_max_duration: nil}
     end)
   end
 
   test "should spawn ondemand processes when no available worker exists" do
     with_pool(1, 1, fn pid ->
-      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1, checkout_max_duration: nil}
       w1 = PoolSup.checkout_nonblocking(pid)
       assert is_pid(w1)
-      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0, checkout_max_duration: nil}
       w2 = PoolSup.checkout_nonblocking(pid)
       assert is_pid(w2)
-      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 2, working: 2, available: 0}
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 2, working: 2, available: 0, checkout_max_duration: nil}
       assert PoolSup.checkout_nonblocking(pid) == nil
       PoolSup.checkin(pid, w1)
-      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0}
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0, checkout_max_duration: nil}
       PoolSup.checkin(pid, w2)
-      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1}
+      assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1, checkout_max_duration: nil}
     end)
   end
 
@@ -208,7 +208,7 @@ defmodule PoolSupTest do
   end
 
   defp initial_context(pid, reserved, ondemand) do
-    %{pid: pid, reserved: reserved, ondemand: ondemand, checked_out: [], waiting: :queue.new, cmds: [start: [reserved, ondemand]]}
+    %{pid: pid, reserved: reserved, ondemand: ondemand, checked_out: [], waiting: :queue.new(), cmds: [start: [reserved, ondemand]]}
   end
 
   @capacity_values [0, 1, 2, 3, 5, 10]

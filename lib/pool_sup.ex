@@ -120,7 +120,7 @@ defmodule PoolSup do
   @doc """
   Query current status of a pool.
   """
-  defun status(pool :: pool) :: %{reserved: nni, ondemand: nni, children: nni, available: nni, working: nni} when nni: non_neg_integer do
+  defun status(pool :: pool) :: %{reserved: nni, ondemand: nni, children: nni, available: nni, working: nni, checkout_max_duration: nil | pos_integer} when nni: non_neg_integer do
     GenServer.call(pool, :status)
   end
 
@@ -199,13 +199,14 @@ defmodule PoolSup do
     end
   end
   def handle_call(:status, _from,
-                  state(reserved: reserved, ondemand: ondemand, all: all, available: available, working: working) = s) do
+                  state(reserved: reserved, ondemand: ondemand, all: all, available: available, working: working, checkout_max_duration: dur) = s) do
     r = %{
-      reserved:  reserved,
-      ondemand:  ondemand,
-      children:  map_size(all),
-      available: length(available),
-      working:   PidRefSet.size(working),
+      reserved:              reserved,
+      ondemand:              ondemand,
+      children:              map_size(all),
+      available:             length(available),
+      working:               PidRefSet.size(working),
+      checkout_max_duration: dur,
     }
     {:reply, r, s}
   end
