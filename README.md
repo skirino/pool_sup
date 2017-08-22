@@ -15,8 +15,8 @@
 - `PoolSup` process manages which worker processes are in use and which are not.
 - `PoolSup` automatically restarts crashed workers.
 - Functions to request pid of an available worker process: `checkout/2`, `checkout_nonblocking/2`.
-- Run-time configuration of pool size: `change_capacity/3`.
-- Automatic cleanup of workers hanging around too long without checkin as a safeguard against process leaks.
+- Run-time reconfiguration of pool size: `change_capacity/3`.
+- Automatic cleanup of workers hanging around too long without checkin, as a safeguard against process leaks.
 - Load-balancing using multiple pools: `PoolSup.Multi`.
 
 ## Example
@@ -24,25 +24,25 @@
 Suppose we have a module that implements both `GenServer` and `PoolSup.Worker` behaviours
 (`PoolSup.Worker` behaviour requires only 1 callback to implement, `start_link/1`).
 
-    iex(1)> defmodule MyWorker do
-    ...(1)>   @behaviour PoolSup.Worker
-    ...(1)>   use GenServer
-    ...(1)>   def start_link(arg) do
-    ...(1)>     GenServer.start_link(__MODULE__, arg)
-    ...(1)>   end
-    ...(1)>   # definitions of gen_server callbacks...
-    ...(1)> end
+    defmodule MyWorker do
+      @behaviour PoolSup.Worker
+      use GenServer
+      def start_link(arg) do
+        GenServer.start_link(__MODULE__, arg)
+      end
+      # definitions of gen_server callbacks...
+    end
 
 When we want to have 3 worker processes that run `MyWorker` server:
 
-    iex(2)> {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, 0, [name: :my_pool])
+    {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 3, 0, [name: :my_pool])
 
 Each worker process is started using `MyWorker.start_link({:worker, :arg})`.
 Then we can get a pid of a child currently not in use:
 
-    iex(3)> worker_pid = PoolSup.checkout(:my_pool)
-    iex(4)> do_something(worker_pid)
-    iex(5)> PoolSup.checkin(:my_pool, worker_pid)
+    worker_pid = PoolSup.checkout(:my_pool)
+    do_something(worker_pid)
+    PoolSup.checkin(:my_pool, worker_pid)
 
 Don't forget to return the `worker_pid` when finished; for simple use cases `PoolSup.transaction/3` comes in handy.
 
