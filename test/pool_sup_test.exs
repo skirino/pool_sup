@@ -2,8 +2,8 @@ defmodule PoolSupTest do
   use ExUnit.Case
   import CustomSupTest
 
-  defp with_pool(reserved \\ 3, ondemand \\ 0, f) do
-    {:ok, pid} = PoolSup.start_link(W, [], reserved, ondemand)
+  defp with_pool(reserved \\ 3, ondemand \\ 0, options \\ [], f) do
+    {:ok, pid} = PoolSup.start_link(W, [], reserved, ondemand, options)
     f.(pid)
     shutdown_pool(pid)
   end
@@ -186,6 +186,44 @@ defmodule PoolSupTest do
       assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 1, available: 0, checkout_max_duration: nil}
       PoolSup.checkin(pid, w2)
       assert PoolSup.status(pid) == %{reserved: 1, ondemand: 1, children: 1, working: 0, available: 1, checkout_max_duration: nil}
+    end)
+  end
+
+  test "pool with checkout_max_duration should kill workers which have been checked out for too long" do
+    with_pool(3, 0, [checkout_max_duration: 1], fn pool ->
+      w1 = PoolSup.checkout(pool)
+      w2 = PoolSup.checkout(pool)
+      ref1 = Process.monitor(w1)
+      ref2 = Process.monitor(w2)
+      :timer.sleep(2000)
+      assert_receive({:DOWN, ^ref1, :process, ^w1, :killed})
+      assert_receive({:DOWN, ^ref2, :process, ^w2, :killed})
+    end)
+  end
+
+  test "pool should quit killing too-long-running workers by changeing :checkout_max_duration to nil" do
+    with_pool(3, 0, [checkout_max_duration: 1], fn pool ->
+      assert PoolSup.status(pool).checkout_max_duration == 1
+      w1 = PoolSup.checkout(pool)
+      ref1 = Process.monitor(w1)
+      PoolSup.change_checkout_max_duration(pool, nil)
+      assert PoolSup.status(pool).checkout_max_duration == nil
+      :timer.sleep(2000)
+      refute_receive({:DOWN, ^ref1, :process, ^w1, :killed})
+      assert Process.alive?(w1)
+      PoolSup.checkin(pool, w1)
+    end)
+  end
+
+  test "pool should start killing too-long-running workers by changing :checkout_max_duration to finite value" do
+    with_pool(3, 0, fn pool ->
+      assert PoolSup.status(pool).checkout_max_duration == nil
+      w1 = PoolSup.checkout(pool)
+      ref1 = Process.monitor(w1)
+      PoolSup.change_checkout_max_duration(pool, 1)
+      assert PoolSup.status(pool).checkout_max_duration == 1
+      :timer.sleep(2000)
+      assert_receive({:DOWN, ^ref1, :process, ^w1, :killed})
     end)
   end
 

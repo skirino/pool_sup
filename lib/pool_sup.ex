@@ -50,7 +50,22 @@ defmodule PoolSup do
   - `worker_init_arg` is the value passed to `worker_module.start_link/1` callback function.
   - `reserved` is the number of workers this `PoolSup` process holds.
   - `ondemand` is the maximum number of workers that are spawned on checkouts when all reserved processes are in use.
-  - Currently only `:name` option for name registration is supported.
+  - `options` is a keyword list of the following options:
+      - `:name`: used for name registration for the pool process.
+      - `:checkout_max_duration`: a threshold (in seconds) of worker's checkout duration (see below). Defaults to `nil` (workers won't be killed).
+
+  ## Terminating non-returning workers
+
+  Sometimes it's difficult to guarantee that a checkout-out worker pid will eventually be checked-in.
+  For example there are cases where a caller process of `checkout/2` is killed during waiting for a reply (a worker pid)
+  from a pool process, resulting in a process leak of the worker pid.
+
+  For this purpose `PoolSup` provides `:checkout_max_duration` option as a safeguard against process leaks.
+  If a checked-out worker has not been checked-in for longer than `:checkout_max_duration` seconds,
+  the pool regards the worker process as leaked and kill it.
+
+  If `:checkout_max_duration` is `nil` this cleanup functionality is disabled.
+  You can dynamically change `:checkout_max_duration` option of a pool by `change_checkout_max_duration/2`.
   """
   defun start_link(worker_module   :: g[module],
                    worker_init_arg :: term,
@@ -145,6 +160,19 @@ defmodule PoolSup do
     (_pool, nil, nil) -> :ok
     (pool , r  , o  ) when H.is_nil_or_nni(r) and H.is_nil_or_nni(o) ->
       GenServer.cast(pool, {:change_capacity, r, o})
+  end
+
+  @doc """
+  Changes `:checkout_max_duration` option of the pool.
+
+  See `start_link/5` for detailed explanation of `:checkout_max_duration` option.
+  """
+  defun change_checkout_max_duration(pool :: pool, new_duration :: nil | pos_integer) :: :ok do
+    case new_duration do
+      nil                            -> :ok
+      d when is_integer(d) and d > 0 -> :ok
+    end
+    GenServer.cast(pool, {:change_checkout_max_duration, new_duration})
   end
 
   #
@@ -250,6 +278,13 @@ defmodule PoolSup do
         {r  , o  } -> state(s, reserved: r, ondemand: o)
       end
     {:noreply, handle_capacity_change(s2)}
+  end
+  def handle_cast({:change_checkout_max_duration, dur2}, state(checkout_max_duration: dur1) = s) do
+    s2 = state(s, checkout_max_duration: dur2)
+    if dur1 == nil and dur2 != nil do
+      start_term_increment_timer(dur2)
+    end
+    {:noreply, s2}
   end
 
   defunp handle_worker_checkin(state(reserved:  reserved,

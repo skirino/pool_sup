@@ -16,6 +16,7 @@
 - `PoolSup` automatically restarts crashed workers.
 - Functions to request pid of an available worker process: `checkout/2`, `checkout_nonblocking/2`.
 - Run-time configuration of pool size: `change_capacity/3`.
+- Automatic cleanup of workers hanging around too long without checkin as a safeguard against process leaks.
 - Load-balancing using multiple pools: `PoolSup.Multi`.
 
 ## Example
