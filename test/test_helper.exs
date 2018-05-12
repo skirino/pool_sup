@@ -6,6 +6,11 @@ ExUnit.start()
 defmodule W do
   @behaviour PoolSup.Worker
   use GenServer
+
+  def init(args) do
+    {:ok, args}
+  end
+
   def start_link(_) do
     GenServer.start_link(__MODULE__, {}, [])
   end

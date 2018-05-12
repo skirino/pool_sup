@@ -76,8 +76,7 @@ defmodule PoolSup.Multi do
     terminating_pools:     PidSet.t,
     reserved:              non_neg_integer,
     ondemand:              non_neg_integer,
-    checkout_max_duration: nil | pos_integer,
-  )
+    checkout_max_duration: nil | pos_integer)
 
   @termination_progress_check_interval (if Mix.env == :test, do: 10, else: 60_000)
 

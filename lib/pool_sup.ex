@@ -35,8 +35,7 @@ defmodule PoolSup do
     available:             [pid],
     waiting:               ClientQueue.t,
     checkout_max_duration: nil | pos_integer,
-    current_term:          non_neg_integer,
-  )
+    current_term:          non_neg_integer)
 
   #
   # client API
