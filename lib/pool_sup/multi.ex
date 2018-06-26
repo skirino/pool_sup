@@ -261,7 +261,7 @@ defmodule PoolSup.Multi do
   defp supervisor_init_arg(worker_module, worker_init_arg, opts) do
     sup_name    = opts[:name] || :self
     worker_spec = {PoolSup, [worker_module, worker_init_arg]}
-    spec        = S.init([worker_spec], strategy: :simple_one_for_one)
+    spec        = S.init([worker_spec], [strategy: :simple_one_for_one])
     {sup_name, PoolSup.Callback, [spec]}
   end
 

@@ -67,7 +67,7 @@ defmodule PoolSup do
 
   ## Terminating non-returning workers
 
-  Sometimes it's difficult to guarantee that a checkout-out worker pid will eventually be checked-in.
+  Sometimes it's difficult to guarantee that a checked-out worker pid will eventually be checked-in.
   For example there are cases where a caller process of `checkout/2` is killed during waiting for a reply (a worker pid)
   from a pool process, resulting in a process leak of the worker pid.
 
@@ -207,7 +207,7 @@ defmodule PoolSup do
   defp supervisor_init_arg(mod, init_arg, opts) do
     sup_name    = opts[:name] || :self
     worker_spec = {mod, [init_arg]}
-    spec        = S.init([worker_spec], strategy: :simple_one_for_one, max_restarts: 0, max_seconds: 1)
+    spec        = S.init([worker_spec], [strategy: :simple_one_for_one, max_restarts: 0, max_seconds: 1])
     {sup_name, Callback, [spec]}
   end
 
