@@ -43,7 +43,7 @@ defmodule PoolSup do
   @doc """
   Returns a specification to start this module under a supervisor.
   """
-  defun child_spec(args :: list) :: map do
+  defun child_spec(args :: list) :: Supervisor.child_spec do
     %{
       id:       __MODULE__,
       start:    {__MODULE__, :start_link, args},
