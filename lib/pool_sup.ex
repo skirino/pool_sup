@@ -41,6 +41,18 @@ defmodule PoolSup do
   # client API
   #
   @doc """
+  Returns a child specification to be used when it's not fully specified by the parent supervisor.
+  """
+  defun child_spec(args :: list) :: Supervisor.child_spec do
+    %{
+      id:       __MODULE__,
+      start:    {__MODULE__, :start_link, args},
+      shutdown: :infinity,
+      type:     :supervisor,
+    }
+  end
+
+  @doc """
   Starts a `PoolSup` process linked to the calling process.
 
   ## Arguments
@@ -193,9 +205,9 @@ defmodule PoolSup do
   end
 
   defp supervisor_init_arg(mod, init_arg, opts) do
-    sup_name = opts[:name] || :self
-    worker_spec = S.Spec.worker(mod, [init_arg], [restart: :temporary, shutdown: 5000])
-    spec = S.Spec.supervise([worker_spec], strategy: :simple_one_for_one, max_restarts: 0, max_seconds: 1)
+    sup_name    = opts[:name] || :self
+    worker_spec = {mod, [init_arg]}
+    spec        = S.init([worker_spec], strategy: :simple_one_for_one, max_restarts: 0, max_seconds: 1)
     {sup_name, Callback, [spec]}
   end
 
