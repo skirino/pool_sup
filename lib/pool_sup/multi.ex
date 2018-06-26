@@ -84,7 +84,7 @@ defmodule PoolSup.Multi do
   # client API
   #
   @doc """
-  Returns a specification to start this module under a supervisor.
+  Returns a child specification to be used when it's not fully specified by the parent supervisor.
   """
   defun child_spec(args :: list) :: Supervisor.child_spec do
     %{
