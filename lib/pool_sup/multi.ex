@@ -84,6 +84,18 @@ defmodule PoolSup.Multi do
   # client API
   #
   @doc """
+  Returns a specification to start this module under a supervisor.
+  """
+  defun child_spec(args :: list) :: map do
+    %{
+      id:       __MODULE__,
+      start:    {__MODULE__, :start_link, args},
+      shutdown: :infinity,
+      type:     :supervisor,
+    }
+  end
+
+  @doc """
   Starts a `PoolSup.Multi` process linked to the calling process.
 
   ## Arguments
@@ -247,9 +259,9 @@ defmodule PoolSup.Multi do
   end
 
   defp supervisor_init_arg(worker_module, worker_init_arg, opts) do
-    sup_name = opts[:name] || :self
-    worker_spec = S.Spec.supervisor(PoolSup, [worker_module, worker_init_arg], [restart: :permanent, shutdown: :infinity])
-    spec = S.Spec.supervise([worker_spec], strategy: :simple_one_for_one)
+    sup_name    = opts[:name] || :self
+    worker_spec = {PoolSup, [worker_module, worker_init_arg]}
+    spec        = S.init([worker_spec], strategy: :simple_one_for_one)
     {sup_name, PoolSup.Callback, [spec]}
   end
 

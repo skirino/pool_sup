@@ -11,6 +11,14 @@ defmodule W do
     {:ok, args}
   end
 
+  def child_spec(args) do
+    %{
+      id:      __MODULE__,
+      start:   {__MODULE__, :start_link, args},
+      restart: :temporary,
+    }
+  end
+
   def start_link(_) do
     GenServer.start_link(__MODULE__, {}, [])
   end
