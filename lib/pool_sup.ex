@@ -43,7 +43,7 @@ defmodule PoolSup do
   @doc """
   Returns a child specification to be used when it's not fully specified by the parent supervisor.
   """
-  defun child_spec(args :: list) :: Supervisor.child_spec do
+  defun child_spec(args :: list) :: S.child_spec do
     %{
       id:       __MODULE__,
       start:    {__MODULE__, :start_link, args},
