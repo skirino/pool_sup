@@ -4,6 +4,9 @@ defmodule PoolSup.CustomSupHelper do
   @moduledoc false
 
   @type sup_state :: term
+  @type init_option ::
+          {:max_restarts , non_neg_integer}
+          | {:max_seconds, pos_integer    }
 
   #
   # common gen_server callbacks
@@ -55,6 +58,13 @@ defmodule PoolSup.CustomSupHelper do
 
   defun gen_server_opts(opts :: Keyword.t(any)) :: [name: GenServer.name] do
     Enum.filter(opts, &match?({:name, _}, &1))
+  end
+
+  defun make_sup_spec(worker_spec :: [Supervisor.child_spec], opts :: [init_option] \\ []) :: {:ok, tuple} do
+    intensity = Keyword.get(opts, :max_restarts, 3)
+    period    = Keyword.get(opts, :max_seconds , 5)
+    flags     = %{strategy: :simple_one_for_one, intensity: intensity, period: period}
+    {:ok, {flags, worker_spec}}
   end
 
   defun start_child(sup_state :: sup_state, extra :: [term] \\ []) :: {pid, sup_state} do
