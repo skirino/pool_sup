@@ -206,8 +206,8 @@ defmodule PoolSup do
 
   defp supervisor_init_arg(mod, init_arg, opts) do
     sup_name    = opts[:name] || :self
-    worker_spec = {mod, [init_arg]}
-    spec        = S.init([worker_spec], [strategy: :simple_one_for_one, max_restarts: 0, max_seconds: 1])
+    worker_spec = %{id: mod, start: {mod, :start_link, [init_arg]}, restart: :temporary}
+    spec        = H.make_sup_spec([worker_spec], [max_restarts: 0, max_seconds: 1])
     {sup_name, Callback, [spec]}
   end
 
