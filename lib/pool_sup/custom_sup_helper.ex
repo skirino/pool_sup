@@ -61,9 +61,9 @@ defmodule PoolSup.CustomSupHelper do
   end
 
   defun make_sup_spec(worker_spec :: [Supervisor.child_spec], opts :: [init_option] \\ []) :: {:ok, tuple} do
-    intensity = Keyword.get(opts, :max_restarts, 3)
+    intensity = Keyword.get(opts, :max_restarts, 3) # Defaults to values used by Elixir's Supervisor
     period    = Keyword.get(opts, :max_seconds , 5)
-    flags     = %{strategy: :simple_one_for_one, intensity: intensity, period: period}
+    flags     = %{strategy: :simple_one_for_one, intensity: intensity, period: period} # Convert to the format of `:erlang.sup_flags`
     {:ok, {flags, worker_spec}}
   end
 
