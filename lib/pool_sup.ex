@@ -3,7 +3,6 @@ use Croma
 defmodule PoolSup do
   @moduledoc File.read!(Path.join([__DIR__, "..", "README.md"])) |> String.replace_leading("# ", "") # 1st line shouldn't be a header line in exdoc
 
-  alias Supervisor, as: S
   alias GenServer, as: GS
   use GS
   alias PoolSup.{PidSet, PidRefSet, ClientQueue, Callback}
@@ -43,7 +42,7 @@ defmodule PoolSup do
   @doc """
   Returns a child specification to be used when it's not fully specified by the parent supervisor.
   """
-  defun child_spec(args :: list) :: S.child_spec do
+  defun child_spec(args :: list) :: Supervisor.child_spec do
     %{
       id:       __MODULE__,
       start:    {__MODULE__, :start_link, args},
