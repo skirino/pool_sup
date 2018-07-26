@@ -82,17 +82,7 @@ defmodule CustomSupTest do
     [_header, _data, {:data, [{'State', state_from_get_status}]}] = misc
     assert state_from_get_status == sup_state
 
-    # supervisor:get_callback_module/1 (since Erlang/OTP 18.3), which internally uses sys:get_status/1
-    if otp_version() >= {18, 3, 0} do
-      assert :supervisor.get_callback_module(pid) == PoolSup.Callback
-    end
-  end
-
-  defp otp_version do
-    otp_version_path = Path.join([:code.root_dir, "releases", :erlang.system_info(:otp_release), "OTP_VERSION"])
-    case File.read!(otp_version_path) |> String.trim_trailing() |> String.split(".") |> Enum.map(&String.to_integer/1) do
-      [major, minor]        -> {major, minor, 0    }
-      [major, minor, patch] -> {major, minor, patch}
-    end
+    # supervisor:get_callback_module/1, which internally uses sys:get_status/1
+    assert :supervisor.get_callback_module(pid) == PoolSup.Callback
   end
 end

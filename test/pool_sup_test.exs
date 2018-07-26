@@ -122,7 +122,9 @@ defmodule PoolSupTest do
     with_pool(fn pid ->
       # On rare occasion checkout with timeout=0 succeeds; we try 5 times to make it exit
       catch_exit Enum.each(1..5, fn _ -> PoolSup.checkout(pid, 0) end)
-      assert_receive({r, p} when is_reference(r) and is_pid(p))
+      assert_receive({r, p})
+      assert is_reference(r)
+      assert is_pid(p)
       assert PoolSup.status(pid)[:working] == 0
     end)
   end
