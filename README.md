@@ -56,10 +56,10 @@ Don't forget to return the `worker_pid` when finished; for simple use cases `Poo
 In short:
 
     {:ok, pool_sup_pid} = PoolSup.start_link(MyWorker, {:worker, :arg}, 2, 1)
-    w1  = PoolSup.checkout_nonblocking(pool_sup_pid) # => pre-spawned worker pid
-    w2  = PoolSup.checkout_nonblocking(pool_sup_pid) # => pre-spawned worker pid
-    w3  = PoolSup.checkout_nonblocking(pool_sup_pid) # => newly-spawned worker pid
-    nil = PoolSup.checkout_nonblocking(pool_sup_pid)
+    w1  = PoolSup.checkout_nonblocking(pool_sup_pid) # Returns a pre-spawned worker pid
+    w2  = PoolSup.checkout_nonblocking(pool_sup_pid) # Returns the other pre-spawned worker pid
+    w3  = PoolSup.checkout_nonblocking(pool_sup_pid) # Returns a newly-spawned worker pid
+    nil = PoolSup.checkout_nonblocking(pool_sup_pid) # Returns `nil`, no available process
     PoolSup.checkin(pool_sup_pid, w1)                # `w1` is terminated
     PoolSup.checkin(pool_sup_pid, w2)                # `w2` is kept alive for the subsequent checkout
     PoolSup.checkin(pool_sup_pid, w3)                # `w3` is kept alive for the subsequent checkout

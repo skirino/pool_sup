@@ -6,7 +6,7 @@ defmodule PoolSup.Mixfile do
   def project() do
     [
       app:             :pool_sup,
-      version:         "0.6.0",
+      version:         "0.6.1",
       elixir:          "~> 1.6",
       build_embedded:  Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
@@ -28,7 +28,7 @@ defmodule PoolSup.Mixfile do
       {:croma   , "~> 0.9"},
       {:dialyxir, "~> 0.5"   , only: :dev},
       {:ex_doc  , "~> 0.18.0", only: :dev},
-      {:coverex , "~> 1.4"   , only: :test},
+      {:coverex , "~> 1.5"   , only: :test},
     ]
   end
 
