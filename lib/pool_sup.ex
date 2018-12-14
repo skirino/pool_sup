@@ -204,10 +204,9 @@ defmodule PoolSup do
   end
 
   defp supervisor_init_arg(mod, init_arg, opts) do
-    sup_name    = opts[:name] || :self
     worker_spec = %{id: mod, start: {mod, :start_link, [init_arg]}, restart: :temporary}
     spec        = H.make_sup_spec([worker_spec], [max_restarts: 0, max_seconds: 1])
-    {sup_name, Callback, [spec]}
+    {H.make_sup_name(opts[:name]), Callback, [spec]}
   end
 
   def handle_call(:checkout_nonblocking, {_, ref},

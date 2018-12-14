@@ -4,9 +4,7 @@ defmodule PoolSup.CustomSupHelper do
   @moduledoc false
 
   @type sup_state :: term
-  @type init_option ::
-          {:max_restarts , non_neg_integer}
-          | {:max_seconds, pos_integer    }
+  @type init_option :: {:max_restarts, non_neg_integer} | {:max_seconds, pos_integer}
 
   #
   # common gen_server callbacks
@@ -58,6 +56,15 @@ defmodule PoolSup.CustomSupHelper do
 
   defun gen_server_opts(opts :: Keyword.t(any)) :: [name: GenServer.name] do
     Enum.filter(opts, &match?({:name, _}, &1))
+  end
+
+  def make_sup_name(name_or_nil) do
+    # See private type `:supervisor.init_sup_name` and spec of `:supervisor.init/1`
+    case name_or_nil do
+      nil                -> :self
+      n when is_atom(n)  -> {:local, n}
+      t when is_tuple(t) -> t
+    end
   end
 
   defun make_sup_spec(worker_spec :: [Supervisor.child_spec], opts :: [init_option] \\ []) :: {:ok, tuple} do

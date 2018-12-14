@@ -258,10 +258,9 @@ defmodule PoolSup.Multi do
   end
 
   defp supervisor_init_arg(worker_module, worker_init_arg, opts) do
-    sup_name    = opts[:name] || :self
     worker_spec = PoolSup.child_spec([worker_module, worker_init_arg])
     spec        = H.make_sup_spec([worker_spec])
-    {sup_name, PoolSup.Callback, [spec]}
+    {H.make_sup_name(opts[:name]), PoolSup.Callback, [spec]}
   end
 
   defunp spawn_pools(sup_state    :: sup_state,
