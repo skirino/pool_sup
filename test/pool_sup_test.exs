@@ -122,10 +122,15 @@ defmodule PoolSupTest do
     with_pool(fn pid ->
       # On rare occasion checkout with timeout=0 succeeds; we try 5 times to make it exit
       catch_exit Enum.each(1..5, fn _ -> PoolSup.checkout(pid, 0) end)
-      assert_receive({r, p})
-      assert is_reference(r)
-      assert is_pid(p)
-      assert PoolSup.status(pid)[:working] == 0
+      if String.to_integer(System.otp_release()) < 24 do
+        assert_receive({r, p})
+        assert is_reference(r)
+        assert is_pid(p)
+        assert PoolSup.status(pid)[:working] == 0
+      else
+        # Process alias mechanism is in-place and no reply should be delivered to client.
+        refute_receive(_)
+      end
     end)
   end
 
@@ -305,12 +310,19 @@ defmodule PoolSupTest do
     [
       [Map.keys(all), Map.keys(working1), available] |> List.flatten() |> Enum.all?(&is_pid/1),
       Map.values(working1) |> Enum.all?(fn {ref, term} -> is_reference(ref) and is_integer(term) end),
-      Enum.all?(waiting_queue_list, fn {{pid, ref}, cref} -> is_pid(pid) and is_reference(ref) and is_reference(cref) end),
+      Enum.all?(waiting_queue_list, fn {{pid, ref}, cref} -> is_pid(pid) and is_ref_or_alias_ref(ref) and is_reference(cref) end),
       Enum.all?(waiting_map, fn {pid, {cref, mref}} -> is_pid(pid) and is_reference(cref) and is_reference(mref) end),
       Map.new(working1, fn {pid, {ref, _}} -> {pid, ref} end) == Map.new(working2, fn {ref, pid} -> {pid, ref} end),
       MapSet.subset?(MapSet.new(waiting_map, fn {pid, _} -> pid end), MapSet.new(waiting_queue_list, fn {{pid, _}, _} -> pid end)),
     ]
     |> Enum.all?()
+  end
+
+  defp is_ref_or_alias_ref(ref) do
+    case ref do
+      [:alias | r] -> is_reference(r)
+      r            -> is_reference(r)
+    end
   end
 
   defp all_corresponds_to_child_pids?(all, sup_state) do

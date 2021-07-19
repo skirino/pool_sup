@@ -213,11 +213,16 @@ defmodule PoolSup do
                   state(reserved: reserved, ondemand: ondemand, all: all, available: available) = s) do
     # In nonblocking checkout we use `ref` in `from` tuple (as a micro-optimization to avoid creating new one),
     # since in this case no cancellation would ever happen later and thus any reference would be OK.
+    cancel_ref =
+      case ref do
+        [:alias | r] -> r # Erlang 24
+        r            -> r
+      end
     case available do
-      [pid | pids] -> reply_with_available_worker(pid, pids, ref, s)
+      [pid | pids] -> reply_with_available_worker(pid, pids, cancel_ref, s)
       []           ->
         if map_size(all) < reserved + ondemand do
-          reply_with_ondemand_worker(s, ref)
+          reply_with_ondemand_worker(s, cancel_ref)
         else
           {:reply, nil, s}
         end
