@@ -36,7 +36,7 @@ defmodule PoolSupTest do
   end
 
   test "should die when parent process dies" do
-    spec = Supervisor.Spec.supervisor(PoolSup, [W, [], 3, 0])
+    spec = Supervisor.child_spec({PoolSup, [W, [], 3, 0]}, [])
     assert_dies_on_parent_process_dies(spec, 3)
   end
 

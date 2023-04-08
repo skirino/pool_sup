@@ -52,7 +52,7 @@ defmodule PoolSup.MultiTest do
 
   test "should die when parent process dies" do
     table_id = :ets.new(:pool_sup_multi, [:set, :public, {:read_concurrency, true}])
-    spec = Supervisor.Spec.supervisor(Multi, [table_id, @multi_id, 3, W, [], 4, 1])
+    spec = Supervisor.child_spec({Multi, [table_id, @multi_id, 3, W, [], 4, 1]}, [])
     assert_dies_on_parent_process_dies(spec, 3)
   end
 

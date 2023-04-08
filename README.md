@@ -70,7 +70,7 @@ The following code snippet spawns a supervisor that has `PoolSup` process as one
 
     chilldren = [
       ...
-      Supervisor.Spec.supervisor(PoolSup, [MyWorker, {:worker, :arg}, 5, 3]),
+      Supervisor.child_spec({PoolSup, [MyWorker, {:worker, :arg}, 5, 3]}, []),
       ...
     ]
     Supervisor.start_link(children, [strategy: :one_for_one])

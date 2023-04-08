@@ -24,11 +24,12 @@ defmodule CustomSupTest do
   end
 
   def assert_returns_error_for_prohibited_functions(pid) do
-    {_, child, _, _} = Supervisor.which_children(pid) |> hd
-    assert Supervisor.start_child(pid, [])        == {:error, :pool_sup}
-    assert Supervisor.terminate_child(pid, child) == {:error, :simple_one_for_one}
-    assert Supervisor.restart_child(pid, :child)  == {:error, :simple_one_for_one}
-    assert Supervisor.delete_child(pid, :child)   == {:error, :simple_one_for_one}
+    {_, child, _, _} = Supervisor.which_children(pid) |> hd()
+    assert Supervisor.start_child(pid, {W, []}) == {:error, :pool_sup}
+    # `Supervisor.terminate_child/2` with a PID is deprecated; use `:supervisor` instead.
+    assert :supervisor.terminate_child(pid, child) == {:error, :simple_one_for_one}
+    assert Supervisor.restart_child(pid, :child)   == {:error, :simple_one_for_one}
+    assert Supervisor.delete_child(pid, :child)    == {:error, :simple_one_for_one}
   end
 
   def assert_dies_on_parent_process_dies(spec, n_children) do
