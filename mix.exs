@@ -6,7 +6,7 @@ defmodule PoolSup.Mixfile do
   def project() do
     [
       app:               :pool_sup,
-      version:           "0.6.1",
+      version:           "0.6.2",
       elixir:            "~> 1.7",
       build_embedded:    Mix.env() == :prod,
       start_permanent:   Mix.env() == :prod,
