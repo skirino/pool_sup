@@ -5,7 +5,6 @@
 - [Hex package information](https://hex.pm/packages/pool_sup)
 
 [![Hex.pm](http://img.shields.io/hexpm/v/pool_sup.svg)](https://hex.pm/packages/pool_sup)
-[![Build Status](https://travis-ci.com/skirino/pool_sup.svg)](https://travis-ci.com/github/skirino/pool_sup)
 [![Coverage Status](https://coveralls.io/repos/github/skirino/pool_sup/badge.svg?branch=master)](https://coveralls.io/github/skirino/pool_sup?branch=master)
 
 ## Features
