@@ -71,13 +71,13 @@ defmodule CustomSupTest do
 
   def assert_code_change_returns_an_ok_tuple(mod, pid) do
     state = :sys.get_state(pid)
-    assert match?({:ok, _}, mod.code_change('0.1.2', state, []))
+    assert match?({:ok, _}, mod.code_change(~c"0.1.2", state, []))
   end
 
   def assert_pretends_as_a_supervisor_on_get_status(pid) do
     sup_state = :sys.get_state(pid) |> elem(1)
     {:status, _pid, {:module, _mod}, [_pdict, _sysstate, _parent, _dbg, misc]} = :sys.get_status(pid)
-    [_header, _data, {:data, [{'State', state_from_get_status}]}] = misc
+    [_header, _data, {:data, [{~c"State", state_from_get_status}]}] = misc
     assert state_from_get_status == sup_state
 
     # supervisor:get_callback_module/1, which internally uses sys:get_status/1

@@ -43,7 +43,7 @@ defmodule PoolSup.CustomSupHelper do
   # We need to define `format_status` to pretend as if it's an ordinary supervisor when `sys:get_status/1` is called
   # (assuming that `sup_state` is the first element in record)
   def format_status(:terminate, [_pdict, state]), do: state
-  def format_status(:normal   , [_pdict, state]), do: [{:data, [{'State', elem(state, 1)}]}]
+  def format_status(:normal   , [_pdict, state]), do: [{:data, [{~c"State", elem(state, 1)}]}]
 
   #
   # helpers
